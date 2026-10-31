@@ -2,6 +2,19 @@
 
 ## 0.1.0 - unreleased
 
+DUB (roadmap step 5, ADR-008).
+
+- `dubbing dub <programme> <translated cues> --lang L -o <out.mp4|.mov|.mkv|.wav>` (tool `dubbing/dub`, schema `dubbing/dub@1`). `speech.dub` is `EXPERIMENTAL`.
+  - One clip per translated cue, by Chatterbox (default) in the worker.
+  - Each clip is fitted to its source segment with the timing fit at tempo 1.0. `--max-overrun` is bounded by the next cue and the programme's end.
+  - Each line is spoken over the programme's own audio, which is lowered by `--duck` dB (default 12) for exactly as long as the line lasts, and put back into the video.
+- Every media step goes through ffmpeg-skill. `audio` extracts the programme audio, `cut --accurate` makes the pieces, `audio --music --music-volume --gain` mixes, `join` joins and `audio --replace` muxes. No silence is made, so DUB needs no audio-only pad.
+- The output lasts as long as the programme, and its audio as long as its picture (the roadmap's "A/V duration match", `output.av_delta`).
+- `--source-cues`: the translated cues must be the same segments as the source (count, times within 0.1 s), and the source text hash is recorded per line. Translation stays a caller input (ADR-003).
+- `--speaker-voice SPEAKER=VOICE` per cue speaker. `--on-unfit fail` (`TIMING_OVERFLOW`) or `keep` (the original dialogue stays there).
+- ffmpeg-skill adapter: `cut` joins the required tools, and `audio` gains `--music-volume` and `--gain` (capability detection).
+- Tests: 20 new without FFmpeg (`tests/test_dub.py`, sample-exact checks of the mix) and 3 integration tests on a real H.264/AAC video through the real ffmpeg-skill.
+
 Timing fit (roadmap step 4, ADR-007).
 
 - `dubbing fit <cues> <clip>... --json` (tool `dubbing/fit`, schema `dubbing/fit@1`): one clip per cue is measured through ffmpeg-skill/probe against its cue window, and a plan is returned. No media is written.

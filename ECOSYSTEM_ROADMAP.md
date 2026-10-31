@@ -14,12 +14,12 @@ Skeleton 0.1.0 ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contra
 | Owned job | Status | Note |
 |---|---|---|
 | AIナレーション(TTS) | experimental | NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)): text works with Chatterbox or VOICEVOX ([#5](https://github.com/kajisho5/dubbing-skill/pull/5)); timed cues wait for ffmpeg-skill/pad on audio |
-| 吹替・声の置換 | missing | needs translated cues; nobody translates today. Timing fit plan ready ([#6](https://github.com/kajisho5/dubbing-skill/pull/6), ADR-007) |
+| 吹替・声の置換 | experimental | DUB ([#7](https://github.com/kajisho5/dubbing-skill/pull/7), ADR-008) on caller-translated cues; nobody translates today. Timing fit at tempo 1.0 until ffmpeg-skill changes tempo on audio alone |
 | 音声解説 | missing |  |
 
 ## Wiring
 
-None. Expected: ffmpeg-skill probe, join, audio --replace / --music --duck, loudness; inputs from transcription and subtitle-skill.
+ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --gain`, `--replace`) and cut (DUB). Expected: loudness; inputs from transcription and subtitle-skill.
 
 ## Steps
 
@@ -31,7 +31,7 @@ None. Expected: ffmpeg-skill probe, join, audio --replace / --music --duck, loud
   - Done when: skips when the app is absent
 - [x] **4. Timing fit** ([#6](https://github.com/kajisho5/dubbing-skill/pull/6), [docs/decisions.md](docs/decisions.md) ADR-007; `dubbing fit <cues> <clip>...` measures each clip through ffmpeg-skill/probe and plans tempo (at most `--max-tempo`, default 1.25, never slowed), silence and unfit lines (`TIMING_OVERFLOW` or `--on-unfit report`); rendering the plan waits on an audio-only tempo and pad in ffmpeg-skill) — fit each line into its cue window (tempo limit, pad, overflow report)
   - Done when: unit tests on overflow/underflow
-- [ ] **5. DUB op** — replace dialogue via ffmpeg-skill audio --replace
+- [x] **5. DUB op** ([#7](https://github.com/kajisho5/dubbing-skill/pull/7), [docs/decisions.md](docs/decisions.md) ADR-008; `dubbing dub <programme> <translated cues>`: one clip per cue, fitted to its source segment at tempo 1.0, spoken over the programme's own sound lowered by `--duck` dB, back into the video through ffmpeg-skill audio / cut / join / `audio --replace`; output audio and picture checked to match) — replace dialogue via ffmpeg-skill audio --replace
   - Done when: A/V duration match
 - [ ] **6. Consent gate for voice cloning** — refuse a reference voice without a consent record
   - Done when: security test

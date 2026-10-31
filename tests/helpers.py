@@ -308,7 +308,8 @@ def fake_contract(pad_audio: bool = True, drop: Optional[Tuple[str, str]] = None
 
 
 class WaveSkill:
-    """Stands in for ffmpeg-skill in unit tests (no FFmpeg): probe, pad and join on 16-bit PCM WAV with the wave module,
+    """Stands in for ffmpeg-skill in unit tests (no FFmpeg): probe, pad, join, cut, audio extraction and the audio mix of
+    a line over a piece of the programme (--music --music-volume --gain) on 16-bit PCM mono WAV with the wave module,
     each call recorded. Test-only; the package itself only ever runs ffmpeg-skill's tools."""
 
     def __init__(self, pad_audio: bool = True) -> None:
@@ -343,6 +344,40 @@ class WaveSkill:
             out += samples
         _write16(output, out, sample_rate)
         return {"status": "completed"}
+
+
+    def extract_audio(self, input_path: str, output: str, audio_stream: int = 0, timeout: Optional[float] = None) -> Dict[str, Any]:
+        self.calls.append(("extract", (os.path.basename(input_path), audio_stream)))
+        rate, samples = wav_samples(input_path)
+        _write16(output, samples, rate)
+        return {"status": "completed"}
+
+    def cut(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
+        self.calls.append(("cut", (os.path.basename(input_path), round(start, 3), round(end, 3))))
+        rate, samples = wav_samples(input_path)
+        _write16(output, samples[int(round(start * rate)):int(round(end * rate))], rate)
+        return {"status": "completed"}
+
+    def mix(self, main: str, music: str, output: str, music_volume: float = 0.0, gain: float = 0.0,
+            timeout: Optional[float] = None) -> Dict[str, Any]:
+        """As ffmpeg-skill/audio --music --music-volume --gain: the main track's length and rate, music resampled
+        (nearest sample), both scaled, summed and clipped."""
+        self.calls.append(("mix", (os.path.basename(main), os.path.basename(music), round(music_volume, 2), round(gain, 2))))
+        rate, base = wav_samples(main)
+        mrate, extra = wav_samples(music)
+        g, mg = 10 ** (gain / 20.0), 10 ** (music_volume / 20.0)
+        out = []
+        for i, v in enumerate(base):
+            j = int(i * mrate / rate)
+            m = extra[j] if j < len(extra) else 0
+            out.append(max(-32768, min(32767, int(round(v * g + m * mg)))))
+        _write16(output, out, rate)
+        return {"status": "completed"}
+
+
+def mixed_sample(programme: int, voice: int, duck_db: float, voice_gain_db: float = 0.0) -> int:
+    """What WaveSkill.mix writes for one sample (for exact assertions in the DUB / AUDIO_DESCRIPTION tests)."""
+    return max(-32768, min(32767, int(round(programme * 10 ** (-duck_db / 20.0) + voice * 10 ** (voice_gain_db / 20.0)))))
 
 
 def _write16(path: str, samples: List[int], rate: int) -> None:

@@ -18,12 +18,12 @@
 
 AI narration (TTS), voice replacement (dubbing) and audio description, timed to the picture, for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Every media step (probe, assembling clips, putting the voice into the video, loudness) goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.1.0, NARRATE experimental.** `contract`, `doctor`, `engines`, `narrate` and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). DUB and AUDIO_DESCRIPTION are declared (`PROPOSED`) and arrive in [roadmap](ECOSYSTEM_ROADMAP.md) steps 5 and 7.
+**Status: 0.1.0, NARRATE and DUB experimental.** `contract`, `doctor`, `engines`, `narrate`, `dub` ([ADR-008](docs/decisions.md)) and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). AUDIO_DESCRIPTION is declared (`PROPOSED`) and arrives in [roadmap](ECOSYSTEM_ROADMAP.md) step 7.
 
 | Op | Capability | Default engine | Lifecycle | Step |
 |---|---|---|---|---|
 | NARRATE | `speech.narrate` | Chatterbox Multilingual | `EXPERIMENTAL` | 2 ([ADR-005](docs/decisions.md)) |
-| DUB | `speech.dub` | Chatterbox Multilingual | `PROPOSED` | 5 |
+| DUB | `speech.dub` | Chatterbox Multilingual | `EXPERIMENTAL` | 5 ([ADR-008](docs/decisions.md)) |
 | AUDIO_DESCRIPTION | `speech.audio_description` | Chatterbox Multilingual | `PROPOSED` | 7 |
 
 **Translation is not done here.** Every op takes cues whose text is already in the target language. The caller supplies them, and no translation engine is chosen ([ADR-003](docs/decisions.md)).
@@ -35,6 +35,7 @@ dubbing engines --json               # status, version, licences, credit and wat
 dubbing contract --json              # machine-readable contract (alias: skill --json)
 dubbing narrate script.txt --lang ja -o narration.wav --json   # text or cues -> one clip per line -> timeline WAV
 dubbing narrate script.txt --lang ja -o narration.wav --engine voicevox --json   # the VOICEVOX app on 127.0.0.1:50021
+dubbing dub talk.mp4 en.srt --lang en -o talk.en.mp4 --source-cues ja.srt --json   # dialogue replaced, ducked over the programme
 dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and silence each line needs; lines that cannot fit
 ```
 
@@ -55,6 +56,18 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
   - Only characters whose terms were verified are used by default: ずんだもん and 四国めたん, matched by uuid and name. Any other character is refused with `TERMS_UNVERIFIED`. Pass `--accept-unverified-voice-terms` only after you have checked its terms yourself. Its credit is then recorded as unverified.
 - **Reference voice.** `--reference` / `--consent` (voice cloning) are refused with `NOT_IMPLEMENTED` until the consent gate of step 6 exists. Nothing is read.
 
+## DUB
+
+`dubbing dub <programme> <translated cues> --lang <lang> -o <out>` replaces the dialogue of each cue's segment with the translated line, spoken by a local engine over the programme's own sound, and puts the result back into the video. Details are in [ADR-008](docs/decisions.md).
+
+- **Cues.** The translated cues (`.json`, `.srt`, `.vtt`), one per source segment, at the source's times, already in `--lang`. This skill does not translate ([ADR-003](docs/decisions.md)). `--source-cues` names the source cues: they must be the same segments (count, and times within 0.1 s), and each line records the hash of the source text it translates.
+- **Output.** A video (`.mp4`, `.mov`, `.mkv`, the picture stream-copied) or the new programme audio alone (`.wav`). `--audio-stream` picks the programme's audio stream.
+- **Voices.** `--speaker-voice SPEAKER=VOICE` per cue speaker, else `--voice`, else the engine's default. Engines: Chatterbox (default) and Style-Bert-VITS2 (step 8). A reference voice waits for the consent gate (step 6).
+- **Timing.** Each line is fitted to its cue with the timing fit at tempo 1.0, because ffmpeg-skill cannot change the tempo of audio alone. `--max-overrun` gives a line up to 5 s past its cue end, never past the next cue or the programme's end. A line that still does not fit fails the op with `TIMING_OVERFLOW`, or keeps the original dialogue there with `--on-unfit keep`.
+- **Mix.** The programme audio is cut at every line's start and end (ffmpeg-skill/cut, sample-exact). Under each line it is lowered by `--duck` dB (default 12) and the line is added at `--voice-gain` dB (default 0) (ffmpeg-skill/audio `--music`). Everywhere else it is untouched. The pieces are joined back (ffmpeg-skill/join) and replace the video's audio (ffmpeg-skill/audio `--replace`). No silence is made.
+- **Validation.** The output must last as long as the programme, and its audio as long as its picture, within max(0.1 s, 1 %) (`output.av_delta`).
+- **Receipt.** A provenance block per clip and for the output, the fit plan, every piece of the mix, `kept_original`, and `obligations` (credits, watermark).
+
 ## Timing fit
 
 `dubbing fit <cues> <clip>... --json` checks whether each spoken line fits its cue window, and how. It takes cues (`.json`, `.srt`, `.vtt`) and one clip per cue, in cue order, and measures every clip through ffmpeg-skill/probe. It returns a plan (`dubbing/fit@1`) and writes no media. Details are in [ADR-007](docs/decisions.md).
@@ -67,7 +80,7 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
   - Lines are never slowed down.
 - **Silence.** `lead` is the silence before each placed line, and `tail` is the silence after the last one up to the last cue's end.
 - **Policy.** An unfit line fails the call with `TIMING_OVERFLOW` (exit 4), with the plan in `error.details.plan`. `--on-unfit report` returns the plan with `summary.all_fit: false` instead.
-- **Rendering** needs an audio-only tempo change and an audio-only pad in ffmpeg-skill, which 2.23.1 does not have. The plan says so under `render`, and NARRATE and DUB apply it once ffmpeg-skill can.
+- **Rendering** needs an audio-only tempo change and an audio-only pad in ffmpeg-skill, which 2.24.0 does not have. The plan says so under `render`. DUB applies the plan at tempo 1.0 and needs no pad (ADR-008). NARRATE and DUB apply tempo once ffmpeg-skill can.
 
 ## Engines (optional, [ADR-001](docs/decisions.md))
 
@@ -84,7 +97,7 @@ Cloning a real person's voice needs a recorded consent from that person. Roadmap
 
 ## ffmpeg-skill
 
-The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `DUBBING_FFMPEG_SKILL_DIR`, `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. Compatibility is checked tool by tool and flag by flag against its contract, not by version number. The tools and flags it needs: `probe`; `join --transition --sample-rate --channels`; `audio --replace --music --duck --audio-stream --overwrite`; `loudness --lufs --measure-only`. Optional: `pad --start --end` on audio-only input (declared `audio_only`), for timed cues.
+The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `DUBBING_FFMPEG_SKILL_DIR`, `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. Compatibility is checked tool by tool and flag by flag against its contract, not by version number. The tools and flags it needs: `probe`; `join --transition --sample-rate --channels`; `audio --replace --music --music-volume --gain --duck --audio-stream --overwrite`; `loudness --lufs --measure-only`; `cut --start --end --accurate`. Optional: `pad --start --end` on audio-only input (declared `audio_only`), for timed cues.
 
 ## JSON and errors
 
@@ -101,10 +114,11 @@ Unit tests need no engine, no weights, no FFmpeg and no network:
 - Package lookups are mocked, and the Hugging Face cache is a temporary directory.
 - VOICEVOX and Style-Bert-VITS2 are replaced by fake apps on loopback. The fake VOICEVOX answers `/version`, `/speakers`, `/audio_query` and `/synthesis` in the shapes of voicevox_engine 0.26.0, and refuses any other request shape.
 - NARRATE runs the real worker on a fake `chatterbox` package that makes tones or silence of a known length.
+- DUB runs on a WAV programme with WaveSkill: the programme is checked sample for sample between lines, and under each line it must be the programme lowered by `--duck` plus the line.
 - Timing fit is tested as pure decisions (exact fit, speed-up, over the limit, padding, empty and zero-length slots, 2000 lines) and on WAVs with non-ASCII names.
 - A WAV-only stand-in replaces ffmpeg-skill.
 
-The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join, and timing fit through its probe. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files. The real-VOICEVOX tests run only with `DUBBING_REAL_VOICEVOX=1`, and skip when the app is absent. CI's `voicevox` job sets it, after starting the official CPU image 0.26.0 (pinned by digest) on 127.0.0.1:50021.
+The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join, timing fit through its probe, and DUB on a test video made with FFmpeg's own test sources, through probe, audio, cut and join (audio and picture must last as long as each other). The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files. The real-VOICEVOX tests run only with `DUBBING_REAL_VOICEVOX=1`, and skip when the app is absent. CI's `voicevox` job sets it, after starting the official CPU image 0.26.0 (pinned by digest) on 127.0.0.1:50021.
 
 ## Licence
 

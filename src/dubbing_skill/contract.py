@@ -11,6 +11,8 @@ from .engines.voicevox import DEFAULT_STYLE_ID as VOICEVOX_DEFAULT_STYLE, VERIFI
 from .errors import ERROR_TABLE
 from .cues import MAX_LINE_CHARS, MAX_LINES
 from .ffmpeg_skill import FLAGS_USED, OPTIONAL_TOOLS, OPTIONAL_USE, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
+from .dub import ALIGN_TOLERANCE, DUB_SCHEMA, DUB_TEMPO, TEMPO_GAP
+from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, MAX_DUCK_DB, MAX_VOICE_GAIN_DB
 from .ops import NARRATE_SCHEMA
 from .provenance import ENGINE_FIELDS
 from .timing import (DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, FIT_SCHEMA, MAX_OVERRUN_LIMIT, RENDER_GAP, TEMPO_LIMIT,
@@ -47,11 +49,33 @@ _OP_TOOLS = {
                           "of its audio_query, 24 kHz by default); one clip per line, each placed at "
                           "its cue start (cues) or back to back (text); the timeline lasts to the later of the last clip and the "
                           "last cue end"},
-    "dub": {"description": "Dialogue replaced with translated speech fitted to each cue window, muxed through ffmpeg-skill",
-            "inputs": ["source video", "translated cues (CUES_INPUT)", "voice per speaker"],
-            "argv": ["dub", "<video>", "<cues.json|cues.srt>", "--lang <en>", "-o <out.mp4>", "[--engine chatterbox]",
-                     "[--voice <speaker>=<id>]...", "[--audio-stream 0]", "[--translation-note <json>]", "[--timeout 3600]",
-                     "[--overwrite]", "--json"]},
+    "dub": {"description": "Dialogue replaced with translated speech (ADR-008): one clip per translated cue by a local engine, "
+                           "fitted to its source segment (timing fit, ADR-007, tempo 1.0), spoken over the programme's own "
+                           "audio lowered by --duck dB while the line is spoken, and put back into the video; every media "
+                           "step through ffmpeg-skill (audio, cut, join, probe)",
+            "inputs": ["the programme: a video (or an audio file with a .wav output)",
+                       "translated cues (CUES_INPUT), one per source segment at its times; translation is the caller's (ADR-003)",
+                       "optional source cues (--source-cues): checked to be the same segments, the source text hash recorded",
+                       "a voice per cue speaker (--speaker-voice SPEAKER=VOICE, else --voice); a reference voice is refused "
+                       "until the consent gate (step 6)"],
+            "argv": ["dub", "<video|audio>", "<cues.json|cues.srt|cues.vtt>", "--lang <en>", "-o <out.mp4|out.mov|out.mkv|out.wav>",
+                     "[--source-cues <src.srt>]", "[--engine chatterbox]", "[--voice <id>]", "[--speaker-voice <speaker>=<id>]...",
+                     "[--audio-stream 0]", f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|keep]",
+                     f"[--duck {DEFAULT_DUCK_DB:g}]", f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--translation-note <json>]",
+                     "[--seed 0]", "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
+            "refused": {"--reference / --consent": "NOT_IMPLEMENTED until roadmap step 6 (consent gate, ADR-001)",
+                        "plain text": "INVALID_ARGUMENT: each line replaces the dialogue of its segment, so cues are needed",
+                        "a line longer than its room": "TIMING_OVERFLOW unless --on-unfit keep (the original dialogue stays there)"},
+            "schema": DUB_SCHEMA,
+            "limits": {"lines": MAX_LINES, "chars_per_line": MAX_LINE_CHARS, "tempo": DUB_TEMPO,
+                       "max_overrun": {"default": DEFAULT_MAX_OVERRUN, "range": [0.0, MAX_OVERRUN_LIMIT], "unit": "s",
+                                       "bounded_by": "the next cue's start and the programme's end"},
+                       "duck_db": {"default": DEFAULT_DUCK_DB, "range": [0.0, MAX_DUCK_DB]},
+                       "voice_gain_db": {"default": DEFAULT_VOICE_GAIN_DB, "range": [-MAX_VOICE_GAIN_DB, MAX_VOICE_GAIN_DB]},
+                       "alignment_tolerance": ALIGN_TOLERANCE, "duration_tolerance": "max(0.1 s, 1 %)"},
+            "render": {"tempo": TEMPO_GAP, "silence": "none is made: the time between lines is the programme's own sound"},
+            "output": "the programme with its audio replaced (video stream-copied), or the new programme audio as PCM WAV; "
+                      "as long as the programme, audio as long as the picture (max(0.1 s, 1 %))"},
     "audio_description": {"description": "Description narration placed only inside caller-given gaps, programme audio ducked",
                           "inputs": ["source video", "description cues inside caller-given gaps"],
                           "argv": ["describe", "<video>", "<gaps.json>", "--lang <ja>", "-o <out.mp4>", "[--engine chatterbox]",
