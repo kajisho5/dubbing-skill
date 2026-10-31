@@ -11,12 +11,16 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
                               cues (.json / .srt / .vtt) or text (.txt) spoken by a local engine, one clip per line,
                               laid on one timeline WAV through ffmpeg-skill (ADR-005); --engine voicevox uses the
                               VOICEVOX app on loopback, with the credit of each voice in the receipt (ADR-006)
+  dubbing dub <video> <cues> --lang en -o <out.mp4> --json
+                              dialogue replaced by translated speech (ADR-008): one clip per translated cue, fitted to its
+                              source segment, spoken over the programme's own sound (ducked) and put back into the video,
+                              all through ffmpeg-skill; lines that cannot fit fail (TIMING_OVERFLOW) or keep the original
   dubbing fit <cues> <clip>... --json
                               timing fit (ADR-007): one clip per cue measured through ffmpeg-skill/probe against its cue
                               window; the tempo each needs (at most --max-tempo), the silence around it, and every line
                               that cannot fit (TIMING_OVERFLOW, or listed with --on-unfit report). Writes no media
 
-dub and describe are declared PROPOSED and arrive in roadmap steps 5 and 7.
+describe is declared PROPOSED and arrives in roadmap step 7.
 Translation is not an op: the caller passes text that is already translated (ADR-003)."""
 from __future__ import annotations
 
@@ -27,8 +31,10 @@ from typing import Any, Dict, List, Optional
 
 from . import PACKAGE_NAME, SKILL_ID, __version__
 from .contract import contract
+from .dub import UNFIT_POLICIES as DUB_UNFIT_POLICIES, DubRequest, dub
 from .doctor import doctor, engines_report
 from .errors import DubbingError
+from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB
 from .ops import OVERFLOW_POLICIES, NarrateRequest, narrate
 from .service import DEFAULT_TIMEOUT
 from .timing import DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, TEMPO_LIMIT, UNFIT_POLICIES, FitRequest, fit
@@ -70,6 +76,35 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     n.add_argument("--offline", action="store_true")
     n.add_argument("--json", action="store_true")
+    b = sub.add_parser("dub", help="replace a programme's dialogue with translated speech, ducked over its own sound")
+    b.add_argument("input", help="the programme: a video, or an audio file with a .wav output")
+    b.add_argument("cues", help="translated cues (.json, .srt, .vtt), one per source segment at its times, already in --lang")
+    b.add_argument("-o", "--output", required=True, help="a video (.mp4, .mov, .mkv) or the programme audio alone (.wav)")
+    b.add_argument("--lang", required=True, help="the language the translated text is in; nothing is translated here")
+    b.add_argument("--source-cues", help="the source cues the translation is of: checked to be the same segments; the source "
+                                         "text hash is recorded per line")
+    b.add_argument("--engine", help="engine id (default: chatterbox)")
+    b.add_argument("--voice", help="the voice for every speaker without its own (chatterbox: its built-in voice only)")
+    b.add_argument("--speaker-voice", action="append", default=[], metavar="SPEAKER=VOICE",
+                   help="a voice for one cue speaker (repeatable)")
+    b.add_argument("--reference", help="reference voice for cloning: refused until the consent gate (roadmap step 6)")
+    b.add_argument("--consent", help="consent record for --reference (roadmap step 6)")
+    b.add_argument("--audio-stream", type=int, default=0, help="the programme's audio stream to dub, 0-based (default 0)")
+    b.add_argument("--max-overrun", type=float, default=DEFAULT_MAX_OVERRUN,
+                   help="seconds a line may run past its cue end, never past the next cue or the programme's end (default 0)")
+    b.add_argument("--on-unfit", choices=DUB_UNFIT_POLICIES, default="fail",
+                   help="a line longer than its room: fail (default, TIMING_OVERFLOW) or keep the original dialogue there")
+    b.add_argument("--duck", type=float, default=DEFAULT_DUCK_DB,
+                   help=f"dB the programme is lowered by while a line is spoken (0 to 40, default {DEFAULT_DUCK_DB:g})")
+    b.add_argument("--voice-gain", type=float, default=DEFAULT_VOICE_GAIN_DB,
+                   help=f"dB added to the spoken lines in the mix (-20 to 20, default {DEFAULT_VOICE_GAIN_DB:g})")
+    b.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
+    b.add_argument("--seed", type=int, default=0, help="sampling seed, recorded (default 0)")
+    b.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"time limit in seconds (default {DEFAULT_TIMEOUT:g})")
+    b.add_argument("--overwrite", action="store_true", help="replace an existing output")
+    b.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    b.add_argument("--offline", action="store_true")
+    b.add_argument("--json", action="store_true")
     f = sub.add_parser("fit", help="timing fit: measure one clip per cue against its window; tempo, silence, lines that cannot fit")
     f.add_argument("cues", help="cues (.json, .srt, .vtt): the windows to fit into")
     f.add_argument("clips", nargs="+", help="one audio clip per cue, in cue order (measured through ffmpeg-skill/probe)")
@@ -96,6 +131,18 @@ def _note(text: Optional[str]) -> Optional[Dict[str, Any]]:
     if not isinstance(doc, dict):
         raise DubbingError("INVALID_ARGUMENT", "--translation-note must be a JSON object")
     return doc
+
+
+def _pairs(values: List[str], flag: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for v in values:
+        key, sep, val = v.partition("=")
+        if not sep or not key.strip() or not val.strip():
+            raise DubbingError("INVALID_ARGUMENT", f"{flag} takes SPEAKER=VALUE, not {v!r}")
+        if key.strip() in out:
+            raise DubbingError("INVALID_ARGUMENT", f"{flag}: speaker {key.strip()!r} is given twice")
+        out[key.strip()] = val.strip()
+    return out
 
 
 def _emit(doc: Dict[str, Any], as_json: bool) -> None:
@@ -126,6 +173,16 @@ def _human(doc: Dict[str, Any]) -> None:
     elif doc.get("op") == "narrate":
         out = doc["output"]
         print(f"{out['path']}: {out['duration']}s, {out['sample_rate']} Hz, {doc['input']['lines']} line(s), engine {doc['engine']['id']}")
+        if doc["obligations"]["watermark"]:
+            print(f"  watermark: {doc['obligations']['watermark']['name']}")
+        for c in doc["obligations"]["credit"]:
+            print(f"  credit: {c}")
+        for w in doc["warnings"]:
+            print(f"  warning: {w}")
+    elif doc.get("op") == "dub":
+        out = doc["output"]
+        print(f"{out['path']}: {out['duration']}s ({out['kind']}), {doc['input']['lines']} line(s), "
+              f"{len(doc['kept_original'])} kept original, engine {doc['engine']['id']}")
         if doc["obligations"]["watermark"]:
             print(f"  watermark: {doc['obligations']['watermark']['name']}")
         for c in doc["obligations"]["credit"]:
@@ -186,6 +243,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                                          accept_unverified_terms=args.accept_unverified_voice_terms,
                                          on_overflow=args.on_overflow, timeout=args.timeout, overwrite=args.overwrite,
                                          ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
+            return 0
+        if args.cmd == "dub":
+            _emit(dub(DubRequest(input_path=args.input, cues_path=args.cues, output_path=args.output, lang=args.lang,
+                                 source_cues_path=args.source_cues, engine=args.engine, voice=args.voice,
+                                 speaker_voices=_pairs(args.speaker_voice, "--speaker-voice"), reference_path=args.reference,
+                                 consent_path=args.consent, translation_note=_note(args.translation_note), seed=args.seed,
+                                 audio_stream=args.audio_stream, max_overrun=args.max_overrun, on_unfit=args.on_unfit,
+                                 duck=args.duck, voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
+                                 ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
             return 0
         if args.cmd == "fit":
             _emit(fit(FitRequest(cues_path=args.cues, clip_paths=list(args.clips), lang=args.lang, max_tempo=args.max_tempo,

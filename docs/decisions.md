@@ -315,3 +315,67 @@ Roadmap step 4: fit each line into its cue window (tempo limit, pad, overflow re
 - ffmpeg-skill: an audio-only tempo change (`atempo`, declared `audio_only`) and audio-only `pad` (ADR-005). Once both exist, NARRATE and DUB render the plan with no change to the decisions.
 - DUB (step 5) consumes the plan per translated line.
 - Measure the speech inside each clip (leading and trailing silence) through ffmpeg-skill, so a padded TTS clip is not counted as longer than its speech.
+
+## ADR-008 DUB: translated lines fitted to their source segments, spoken over the programme's own sound, through ffmpeg-skill
+
+### Context
+
+Roadmap step 5: replace the dialogue through ffmpeg-skill `audio --replace`, done when the audio and the picture of the result last as long as each other. The chain the user wants is source subtitles or script, then the translation, then TTS, then the timing fit, then a mix with the original sound (ducked). Translation stays a caller input (ADR-003). The timing fit is ADR-007. Checked against ffmpeg-skill 2.24.0 (main, 2026-10-31).
+
+### Findings
+
+- **The silence NARRATE needs is still missing.** ffmpeg-skill 2.24.0's `pad` still declares `audio_only: false` and refuses an input without video (ADR-005). There is still no audio-only tempo change (ADR-007).
+- **DUB does not need silence.** A dubbed programme keeps the programme's own sound between the lines. Every piece of it can be made with tools that declare `audio_only: true`:
+  - `audio <video> -o programme.wav --audio-stream N` extracts one audio stream as PCM, at the source's rate and layout.
+  - `cut <programme.wav> --start --end --accurate -o piece.wav` cuts a sample-exact piece. Its result reports `precision: sample`.
+  - `audio <piece.wav> --music <line.wav> --music-volume V --gain -D -o speech.wav` mixes a line over a piece of the programme. The graph is `volume=-DdB` on the piece, then `amix=duration=first:normalize=0`. The result keeps the piece's length, rate and layout. A 24 kHz mono line over a 48 kHz stereo piece gives 48 kHz stereo.
+  - `join <pieces...> --transition none --sample-rate R --channels C` joins the pieces.
+  - `audio <video> --replace <new.wav>` stream-copies the picture and pads or trims the sound to its length.
+- Each step was run by hand on a 6 s H.264/AAC test video before the code was written. The output's audio and picture both lasted 6.000 s.
+
+### Decision
+
+- **Op.** `dubbing dub <programme> <translated cues> --lang L -o <out>` (`dub.py`, tool `dubbing/dub`, schema `dubbing/dub@1`). `speech.dub` moves to `EXPERIMENTAL`.
+  - The output is a video (`.mp4`, `.mov`, `.mkv`: the picture is stream-copied) or the new programme audio alone (`.wav`).
+  - Engines: those whose spec serves `dub`, Chatterbox (default) and Style-Bert-VITS2 (synthesis in step 8). VOICEVOX and Kokoro do not dub (ADR-001).
+- **Translation (ADR-003).** The cues are already translated, one per source segment, at the source's times.
+  - `--source-cues` names the source cues. They must be timed, as many, and start and end within 0.1 s of the translated ones, else `INVALID_ARGUMENT` naming the cue.
+  - Each line then records `source_text_sha256` in its provenance. No translation engine is named anywhere.
+- **Voices.** `--speaker-voice SPEAKER=VOICE` (repeatable) maps a cue speaker to an engine voice. Other lines use `--voice`, else the engine's default. Every line goes through `Engine.check_request` before any media work. A reference voice is refused until step 6, as in NARRATE (`refuse_reference`, now shared).
+- **Checks before work.** Every check runs before the engine starts: numbers and policies, paths (output kind, not an input, not existing unless `--overwrite`), cues, alignment, voices, the engine, ffmpeg-skill, and the programme. For the programme, ffmpeg-skill/probe must show the chosen `--audio-stream`, a video stream for a video output, and every cue starting before its end.
+- **Timing fit at tempo 1.0.** Each clip is measured through ffmpeg-skill/probe and fitted with ADR-007's `fit_lines`. The room is the cue plus up to `--max-overrun` seconds (default 0, at most 5), never past the next cue's start or the programme's end. `max_tempo` is 1.0, because ffmpeg-skill cannot change the tempo of audio alone. A line longer than its room is `unfit`.
+  - With `--on-unfit fail` (the default), the op fails with `TIMING_OVERFLOW`, and the details carry the unfit lines and the plan. Nothing is rendered.
+  - With `keep`, the original dialogue stays for that line. It is listed in `kept_original` and in the warnings.
+  - The plan says why tempo is 1.0 (`fit.render`). When ffmpeg-skill gains an audio-only tempo change, the planned tempo can be applied with no change to the decisions.
+- **Mix (`mixing.py`, shared with AUDIO_DESCRIPTION).** The programme audio is cut at every placed line's start and end.
+  - A piece without a line is kept as it is.
+  - A piece under a line becomes the line over that piece, with the piece lowered by `--duck` dB (default 12, 0 to 40) and the line changed by `--voice-gain` dB (default 0, -20 to 20). The programme is lowered for exactly as long as the line lasts. That is the ducking.
+  - The pieces are joined at the programme's rate, in mono or stereo. A wider layout is mixed to stereo, with a warning.
+  - For a video output, the result replaces the programme's audio. No silence is made, and nothing outside ffmpeg-skill touches a sample.
+  - ffmpeg-skill's sidechain `--duck` was considered. It ducks the *music* under the main track, so the line would have to be the main track. The result would then take the line's 24 kHz mono format, and the programme under each line would lose its top octave and its stereo image. A fixed gain over the line's exact span keeps the programme's format.
+- **Validation.** The output goes through ffmpeg-skill/probe. It must last as long as the programme within max(0.1 s, 1 %). For a video, its audio must last as long as its picture within the same tolerance. This is the roadmap's "A/V duration match", reported as `output.av_delta`. Matroska keeps no per-stream duration, so the container's duration stands in for both.
+- **Receipt.** Each clip has a provenance block (op `dub`, speaker, cue, fit status, source text hash), and so does the output (lines placed, lines kept, duck, voice gain, programme layout). `obligations` holds the credits and the watermark summary of the placed clips. `mix.pieces` lists every piece.
+- **ffmpeg-skill tools and flags.** `cut` (`--start --end --accurate`) joins `TOOLS_USED`, and `audio` gains `--music-volume` and `--gain` in `FLAGS_USED`. Capability detection checks them like every other tool and flag. The adapter's methods are `extract_audio`, `cut`, `mix` and `replace_audio`.
+- **Rejected.**
+  - Building one voice track with silence and mixing it in one call. It needs audio-only `pad` (ADR-005).
+  - Making silence by lowering programme audio to nothing. That is not what those tools are for (ADR-005).
+  - Re-synthesising lines faster. That is engine-specific (ADR-007).
+
+### Tests
+
+- `tests/test_dub.py`, 20 tests, no FFmpeg.
+  - The piece plan.
+  - The whole op on a WAV programme, with the fake Chatterbox and WaveSkill (which gained `cut`, `mix` and `extract_audio`). The programme between lines is checked sample for sample. Under a line, each sample is checked to be the programme lowered by `--duck` plus the line.
+  - `TIMING_OVERFLOW` by default and `keep`; `--max-overrun` bounded by the next cue and by the programme's end; the source-cue alignment; a voice per speaker.
+  - Every refusal is checked to come before the engine runs. An engine failure leaves nothing behind. VOICEVOX is refused. The CLI and the contract entry are covered.
+- Integration (CI's integration job): a 6 s H.264/AAC test video made with FFmpeg's `testsrc` and `sine` sources (the fixture only; the skill never runs ffmpeg).
+  - DUB into `.mp4`: audio and picture match, and the picture is stream-copied.
+  - DUB to `.wav`: the programme between lines is byte-identical to a plain extraction, and differs under a line.
+  - The CLI into `.mkv`, with `--on-unfit keep`.
+
+### Follow-ups
+
+- ffmpeg-skill: an audio-only tempo change. Then DUB applies the fit plan's tempo up to a `--max-tempo`.
+- A short fade at each piece boundary, once ffmpeg-skill can fade a piece's start and end without fading the whole mix. Today the programme steps down and up by `--duck` dB at the line's edges.
+- Loudness: normalise each line to a target through ffmpeg-skill/loudness. It refuses clips shorter than about 0.4 s, as "silent".
+- Voice conversion of the original speaker (OpenVoice V2, ADR-001) instead of TTS. It needs the consent gate (step 6).

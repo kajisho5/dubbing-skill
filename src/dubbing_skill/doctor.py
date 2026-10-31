@@ -18,8 +18,8 @@ from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill
 
 DOCTOR_SCHEMA = f"{SKILL_ID}/doctor@1"
-# op -> roadmap step that implements it; NARRATE is implemented (step 2, ADR-005)
-IMPLEMENTED_OPS: Dict[str, bool] = {"narrate": True, "dub": False, "audio_description": False}
+# op -> roadmap step that implements it; NARRATE (step 2, ADR-005) and DUB (step 5, ADR-008) are implemented
+IMPLEMENTED_OPS: Dict[str, bool] = {"narrate": True, "dub": True, "audio_description": False}
 OP_STEP = {"narrate": 2, "dub": 5, "audio_description": 7}
 TRANSLATION = {
     "status": "CALLER_SUPPLIED",

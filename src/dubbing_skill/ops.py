@@ -74,15 +74,19 @@ class NarrateRequest:
     offline: bool = False
 
 
-def consent_gate(req: NarrateRequest) -> None:
+def refuse_reference(reference: Any, consent: Any, op: str = "narrate") -> None:
     """Voice cloning needs a recorded consent of the person whose voice it is (ADR-001, OS ADR-012). Until roadmap step 6
     verifies such a record, no reference voice is accepted: refused here, before the file is even looked at, and again
     by every engine in the worker (Engine.check_request)."""
-    if req.reference_path is not None or req.consent_path is not None:
+    if reference or consent:
         raise DubbingError("NOT_IMPLEMENTED", "a reference voice (voice cloning) needs a recorded consent of that person; the "
-                           "consent gate arrives in roadmap step 6 and no reference voice is accepted before then. Narrate "
-                           "with the engine's built-in voice (no --reference)",
-                           {"roadmap_step": CONSENT_STEP, "policy": "voice_cloning", "reference_read": False})
+                           "consent gate arrives in roadmap step 6 and no reference voice is accepted before then. Use the "
+                           "engine's built-in voice (no --reference)",
+                           {"roadmap_step": CONSENT_STEP, "policy": "voice_cloning", "reference_read": False, "op": op})
+
+
+def consent_gate(req: NarrateRequest) -> None:
+    refuse_reference(req.reference_path, req.consent_path, "narrate")
 
 
 def _check_numbers(req: NarrateRequest) -> None:

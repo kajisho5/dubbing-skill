@@ -70,10 +70,12 @@ class ContractTests(unittest.TestCase):
         for p in c["provides"]:
             self.assertEqual(set(p), {"id", "lifecycle", "tool_id"})
             self.assertIn(p["tool_id"], tool_ids)
-        # an op moves from PROPOSED to EXPERIMENTAL in the PR that implements it (ADR-002): NARRATE in step 2 (ADR-005)
+        # an op moves from PROPOSED to EXPERIMENTAL in the PR that implements it (ADR-002): NARRATE in step 2 (ADR-005),
+        # DUB in step 5 (ADR-008)
         self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]},
-                         {"speech.narrate": "EXPERIMENTAL", "speech.dub": "PROPOSED", "speech.audio_description": "PROPOSED"})
-        self.assertEqual([t["tool_id"] for t in c["tools"] if t["role"] == "transformation" and t["implemented"]], ["dubbing/narrate"])
+                         {"speech.narrate": "EXPERIMENTAL", "speech.dub": "EXPERIMENTAL", "speech.audio_description": "PROPOSED"})
+        self.assertEqual([t["tool_id"] for t in c["tools"] if t["role"] == "transformation" and t["implemented"]],
+                         ["dubbing/narrate", "dubbing/dub"])
         for d in c["dependencies"]:
             self.assertIsInstance(d["version_range"], str)
             self.assertFalse(d["version_range"].replace(".", "").isdigit(), d)
@@ -89,7 +91,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(c["engines"]["default"], DEFAULT_ENGINE)
         ff = next(d for d in c["dependencies"] if d["id"] == "ffmpeg-skill")
         self.assertEqual(ff["flags"], {t: list(f) for t, f in FLAGS_USED.items()})
-        self.assertEqual(ff["tools"], ["probe", "join", "audio", "loudness"])
+        self.assertEqual(ff["tools"], ["probe", "join", "audio", "loudness", "cut"])
 
     def test_translation_is_a_caller_input_and_no_engine_is_chosen(self):
         c = contract()

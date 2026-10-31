@@ -12,8 +12,11 @@ Which ffmpeg-skill tools are used, and for what (the roadmap's wiring):
   probe     source facts (duration, audio streams) before an op, clip / output validation after it
   join      clips -> one timeline WAV, butt-joined (--transition none) at one rate and layout (--sample-rate,
             --channels), step 2 (NARRATE, ADR-005)
-  audio     --replace: the dubbed track into the video (step 5); --music --duck: narration or audio description over
-            the programme audio, ducked (step 7); --audio-stream picks the source stream; --overwrite only on request
+  audio     extraction of the programme audio (-o <prog.wav> --audio-stream N); a spoken line over a piece of the
+            programme (--music <clip> --music-volume V, the programme lowered with --gain -D: ducked while the line is
+            spoken, DUB step 5 and AUDIO_DESCRIPTION step 7, ADR-008); --replace: the new programme audio into the
+            video; --duck (sidechain) stays declared for a bed under speech; --overwrite only on request
+  cut       --start / --end --accurate: a sample-exact piece of the programme audio (DUB, AUDIO_DESCRIPTION, ADR-008)
   loudness  --measure-only before mixing, then normalisation of the voice track to the target (-I / --lufs)
 
 Optional (OPTIONAL_TOOLS): used only when the checkout declares the tool audio_only with these flags; otherwise the
@@ -36,14 +39,15 @@ from .procs import TIMEOUT_EXIT, run_process_group
 
 SUPPORTED_CONTRACT_VERSION = "1.0"   # reported, not gated on (ffmpeg-skill kept "1.0" across 0.x-2.x)
 ENV_DIR_KEYS = ("DUBBING_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
-TOOLS_USED = ("probe", "join", "audio", "loudness")
+TOOLS_USED = ("probe", "join", "audio", "loudness", "cut")
 FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "probe": ("inputs",),
     "join": ("inputs", "output", "transition", "sample_rate", "channels", "json"),
-    "audio": ("input", "output", "replace", "music", "duck", "audio_stream", "overwrite", "json"),
+    "audio": ("input", "output", "replace", "music", "music_volume", "gain", "duck", "audio_stream", "overwrite", "json"),
     "loudness": ("input", "output", "lufs", "measure_only", "overwrite", "json"),
+    "cut": ("input", "output", "start", "end", "accurate", "json"),
 }
-AUDIO_ONLY_TOOLS = ("probe", "join", "audio", "loudness")
+AUDIO_ONLY_TOOLS = ("probe", "join", "audio", "loudness", "cut")
 OPTIONAL_TOOLS: Dict[str, Tuple[str, ...]] = {
     "pad": ("input", "output", "start", "end", "json"),
 }
@@ -210,6 +214,30 @@ class FfmpegSkill:
         args = [os.path.abspath(p) for p in inputs]
         return self._tool("join", [*args, "-o", os.path.abspath(output), "--transition", "none", "--sample-rate", str(int(sample_rate)),
                                    "--channels", str(int(channels))], timeout)
+
+    def extract_audio(self, input_path: str, output: str, audio_stream: int = 0, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """ffmpeg-skill/audio <input> -o <out.wav> --audio-stream N: one audio stream of the programme as PCM WAV (the
+        picture is dropped); the source keeps its rate and layout."""
+        return self._tool("audio", [os.path.abspath(input_path), "-o", os.path.abspath(output), "--audio-stream", str(int(audio_stream))],
+                          timeout)
+
+    def cut(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """ffmpeg-skill/cut <input> --start S --end E --accurate -o <out.wav>: a sample-exact piece of an audio file."""
+        return self._tool("cut", [os.path.abspath(input_path), "--start", f"{max(0.0, start):.6f}", "--end", f"{max(0.0, end):.6f}",
+                                  "--accurate", "-o", os.path.abspath(output)], timeout)
+
+    def mix(self, main: str, music: str, output: str, music_volume: float = 0.0, gain: float = 0.0,
+            timeout: Optional[float] = None) -> Dict[str, Any]:
+        """ffmpeg-skill/audio <main> --music <music> --music-volume V --gain G -o <out.wav>: `music` mixed over `main`, the
+        main track changed by G dB. The result has the main track's length, rate and layout (ADR-008: a spoken line over
+        a piece of the programme, the programme lowered while the line is spoken)."""
+        return self._tool("audio", [os.path.abspath(main), "--music", os.path.abspath(music), f"--music-volume={music_volume:.2f}",
+                                    f"--gain={gain:.2f}", "-o", os.path.abspath(output)], timeout)
+
+    def replace_audio(self, video: str, audio: str, output: str, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """ffmpeg-skill/audio <video> --replace <audio.wav> -o <out>: the video stream-copied with `audio` as its sound,
+        padded or trimmed to the video's length."""
+        return self._tool("audio", [os.path.abspath(video), "--replace", os.path.abspath(audio), "-o", os.path.abspath(output)], timeout)
 
     def pad(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
         """ffmpeg-skill/pad <clip> -o <out.wav> --start S --end E: silence before and after one clip. Only on a checkout

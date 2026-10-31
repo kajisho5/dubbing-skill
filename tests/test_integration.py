@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -22,6 +23,7 @@ from helpers import (FAKE_RATE, FFMPEG_SKILL_DIR, chatterbox_ready, env, fake_ch
                      run_cli, write_tone_wav)
 
 from dubbing_skill.doctor import doctor
+from dubbing_skill.dub import DubRequest, dub
 from dubbing_skill.engines import get_engine, voicevox
 from dubbing_skill.engines.base import EngineRequest
 from dubbing_skill.errors import DubbingError
@@ -131,6 +133,84 @@ class NarrateIntegrationTests(unittest.TestCase):
             rc, doc = run_cli("narrate", script, "--lang", "en", "-o", self.out, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")
         self.assertEqual((rc, doc["ok"]), (0, True), doc)
         self.assertAlmostEqual(doc["output"]["duration"], fake_line_seconds("Hello there.") + fake_line_seconds("Second line."), delta=0.05)
+
+
+def make_programme(path: str, seconds: float = 6.0) -> str:
+    """A test fixture (not part of the skill): an H.264 + AAC stereo 48 kHz video with a 300 Hz tone, made with FFmpeg's
+    own test sources. The skill itself never runs ffmpeg; the fixture is only made here, in the test."""
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+                    f"testsrc=size=320x240:rate=25:duration={seconds}", "-f", "lavfi", "-i",
+                    f"sine=frequency=300:duration={seconds}:sample_rate=48000", "-ac", "2", "-c:v", "libx264", "-pix_fmt",
+                    "yuv420p", "-c:a", "aac", "-shortest", path], check=True, timeout=120)
+    return path
+
+
+@unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
+class DubIntegrationTests(unittest.TestCase):
+    """DUB through the real ffmpeg-skill (probe, audio extraction, cut, the mix, join, audio --replace) on a real video and
+    the fake Chatterbox: the roadmap's "A/V duration match"."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = os.path.join(self.tmp.name, "吹替")
+        os.mkdir(self.dir)
+        self.video = make_programme(os.path.join(self.dir, "talk.mp4"))
+        self.cues = _write(os.path.join(self.dir, "en.json"), json.dumps(
+            [{"start": 0.5, "end": 2.0, "text": "Hello there."}, {"start": 3.0, "end": 5.0, "text": "Thank you all."}]))
+        self.skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+
+    def test_dub_into_the_video_audio_and_picture_match(self):
+        out = os.path.join(self.dir, "dubbed.mp4")
+        with chatterbox_ready(self.tmp.name):
+            doc = dub(DubRequest(input_path=self.video, cues_path=self.cues, output_path=out, lang="en"), skill=self.skill)
+        src, facts = self.skill.probe(self.video), self.skill.probe(out)
+        video_d, audio_d = float(facts["video"]["duration"]), float(facts["audio"]["duration"])
+        self.assertLessEqual(abs(audio_d - video_d), 0.1, facts)
+        self.assertAlmostEqual(video_d, float(src["video"]["duration"]), delta=0.05)
+        self.assertEqual((facts["audio"]["channels"], facts["audio"]["sample_rate"]), (2, 48000))
+        self.assertEqual(facts["video"]["codec"], src["video"]["codec"])                  # stream-copied
+        self.assertEqual(doc["output"]["kind"], "video")
+        self.assertLessEqual(abs(doc["output"]["av_delta"]), doc["output"]["tolerance"])
+        self.assertEqual([s["tool"] for s in doc["steps"]][-2:], ["ffmpeg-skill/audio", "ffmpeg-skill/probe"])
+        self.assertEqual(doc["provenance"]["ffmpeg_skill"]["version"], self.skill.info().version)
+        self.assertEqual([n for n in os.listdir(self.dir) if n.startswith(".dubbing-")], [])
+
+    def test_dub_to_wav_keeps_the_programme_between_lines(self):
+        out = os.path.join(self.dir, "dubbed.wav")
+        with chatterbox_ready(self.tmp.name):
+            doc = dub(DubRequest(input_path=self.video, cues_path=self.cues, output_path=out, lang="en", duck=18.0),
+                      skill=self.skill)
+        ref = os.path.join(self.tmp.name, "ref.wav")
+        self.skill.extract_audio(self.video, ref)
+        # stereo frames, compared on the left channel (the wave reader in helpers is mono: read raw instead)
+        import wave
+        with wave.open(ref, "rb") as a, wave.open(out, "rb") as b:
+            self.assertEqual((b.getnchannels(), b.getframerate()), (2, 48000))
+            self.assertLessEqual(abs(a.getnframes() - b.getnframes()), 48)
+            ra, rb = a.readframes(a.getnframes()), b.readframes(b.getnframes())
+        frame = 4
+        end0 = 0.5 + fake_line_seconds("Hello there.")
+        for lo, hi in ((0.05, 0.45), (end0 + 0.05, 2.95), (3.0 + fake_line_seconds("Thank you all.") + 0.05, 5.9)):
+            i, j = int(lo * 48000) * frame, int(hi * 48000) * frame
+            self.assertEqual(ra[i:j], rb[i:j], (lo, hi))                                   # the programme, untouched
+        i, j = int(0.6 * 48000) * frame, int(0.9 * 48000) * frame
+        self.assertNotEqual(ra[i:j], rb[i:j])                                              # the line, over the ducked programme
+        self.assertEqual(doc["output"]["kind"], "audio")
+        self.assertEqual([p["kind"] for p in doc["mix"]["pieces"]], ["programme", "speech", "programme", "speech", "programme"])
+
+    def test_cli_dub_end_to_end_keeps_the_original_where_a_line_cannot_fit(self):
+        cues = _write(os.path.join(self.dir, "tight.json"), json.dumps(
+            [{"start": 0.5, "end": 0.6, "text": "far too long for this"}, {"start": 3.0, "end": 5.0, "text": "Fine."}]))
+        out = os.path.join(self.dir, "kept.mkv")
+        with chatterbox_ready(self.tmp.name):
+            rc, doc = run_cli("dub", self.video, cues, "--lang", "en", "-o", out, "--on-unfit", "keep", "--ffmpeg-skill",
+                              str(FFMPEG_SKILL_DIR), "--json")
+        self.assertEqual((rc, doc["ok"]), (0, True), doc)
+        self.assertEqual(doc["kept_original"], [0])
+        facts = self.skill.probe(out)                       # Matroska keeps no per-stream duration: the container's
+        self.assertAlmostEqual(float(facts["duration"]), float(self.skill.probe(self.video)["video"]["duration"]), delta=0.1)
+        self.assertTrue(facts["audio"] and facts["video"])
 
 
 REAL = os.environ.get("DUBBING_REAL_CHATTERBOX") == "1"
