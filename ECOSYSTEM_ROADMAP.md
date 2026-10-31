@@ -14,7 +14,7 @@ Skeleton 0.1.0 ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contra
 | Owned job | Status | Note |
 |---|---|---|
 | AIナレーション(TTS) | experimental | NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)): text works with Chatterbox or VOICEVOX ([#5](https://github.com/kajisho5/dubbing-skill/pull/5)); timed cues wait for ffmpeg-skill/pad on audio |
-| 吹替・声の置換 | missing | needs translated cues; nobody translates today |
+| 吹替・声の置換 | missing | needs translated cues; nobody translates today. Timing fit plan ready ([#6](https://github.com/kajisho5/dubbing-skill/pull/6), ADR-007) |
 | 音声解説 | missing |  |
 
 ## Wiring
@@ -29,7 +29,7 @@ None. Expected: ffmpeg-skill probe, join, audio --replace / --music --duck, loud
   - Done when: duration within tolerance; receipt records engine + watermark
 - [x] **3. VOICEVOX engine** ([#5](https://github.com/kajisho5/dubbing-skill/pull/5), [docs/decisions.md](docs/decisions.md) ADR-006; the app's own `/audio_query` + `/synthesis` on loopback, credit `VOICEVOX:<character>` per clip in provenance and obligations, unverified characters refused unless acknowledged; real engine in the `voicevox` CI job) — local app over HTTP; credit in provenance
   - Done when: skips when the app is absent
-- [ ] **4. Timing fit** — fit each line into its cue window (tempo limit, pad, overflow report)
+- [x] **4. Timing fit** ([#6](https://github.com/kajisho5/dubbing-skill/pull/6), [docs/decisions.md](docs/decisions.md) ADR-007; `dubbing fit <cues> <clip>...` measures each clip through ffmpeg-skill/probe and plans tempo (at most `--max-tempo`, default 1.25, never slowed), silence and unfit lines (`TIMING_OVERFLOW` or `--on-unfit report`); rendering the plan waits on an audio-only tempo and pad in ffmpeg-skill) — fit each line into its cue window (tempo limit, pad, overflow report)
   - Done when: unit tests on overflow/underflow
 - [ ] **5. DUB op** — replace dialogue via ffmpeg-skill audio --replace
   - Done when: A/V duration match

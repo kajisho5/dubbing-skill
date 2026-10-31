@@ -2,6 +2,18 @@
 
 ## 0.1.0 - unreleased
 
+Timing fit (roadmap step 4, ADR-007).
+
+- `dubbing fit <cues> <clip>... --json` (tool `dubbing/fit`, schema `dubbing/fit@1`): one clip per cue is measured through ffmpeg-skill/probe against its cue window, and a plan is returned. No media is written.
+- Per line:
+  - `fit` (tempo 1.0, silence after it).
+  - `tempo` (the smallest speed-up within `--max-tempo`, default 1.25, range 1.0 to 2.0, rounded up to 1/1000).
+  - `unfit` (`over_limit`, `empty_slot`, `empty_clip`, `not_measured`, with the needed tempo and the excess; never cut, never placed).
+  - Lines are never slowed down. `--max-overrun` (default 0) lets a line run past its cue end, never past the next cue's start, and only when speed-up alone cannot fit it.
+- Lead and tail silence per placed line, in the shape ffmpeg-skill/pad takes. `--on-unfit fail` (default: `TIMING_OVERFLOW` with the plan in the details) or `report`.
+- Rendering the plan waits on an audio-only tempo change and pad in ffmpeg-skill (2.23.1 has neither). The plan says so under `render`. NARRATE's overrun warning now points at `dubbing fit`.
+- Tests: 31 new (`tests/test_timing.py`), the end-to-end ones through the real ffmpeg-skill/probe in the integration job.
+
 VOICEVOX engine (roadmap step 3, ADR-006).
 
 - `dubbing narrate ... --engine voicevox`: the VOICEVOX app on loopback synthesises each line with its own API (`POST /audio_query`, then `POST /synthesis`, as read from voicevox_engine 0.26.0 and checked against 0.14.0). The client is in `engines/lookup.py` (`loopback_request`), which refuses any non-loopback host before connecting and caps answer sizes. `--voice` is a style id, default 3 (ずんだもん ノーマル).

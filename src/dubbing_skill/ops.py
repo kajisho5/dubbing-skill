@@ -161,7 +161,7 @@ def plan_timeline(script: Script, durations: List[float], on_overflow: str = "fa
     """Where each clip goes. Pure: no media. Plain text: back to back from 0. Cues: each clip at its cue's start; a clip
     still playing when the next cue starts is an overflow (TIMING_OVERFLOW, or with `shift` the next clip waits for
     it and the delay is carried on as drift). A clip longer than its own cue that still ends before the next cue is
-    an overrun: reported, not refused (fitting lines to windows is roadmap step 4). The timeline lasts until the last
+    an overrun: reported, not refused (`dubbing fit` plans the tempo, timing.py, ADR-007; applying it waits on ffmpeg-skill). The timeline lasts until the last
     clip ends or the last cue ends, whichever is later."""
     if len(durations) != len(script.lines):
         raise DubbingError("INTERNAL_ERROR", "one duration per line is needed")
@@ -374,7 +374,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         warnings.append(f"{len(plan['overflows'])} line(s) were pushed back (--on-overflow shift); the last drift is "
                         f"{plan['segments'][-1].get('drift', 0.0):.3f}s")
     if plan["overruns"]:
-        warnings.append(f"{len(plan['overruns'])} line(s) run longer than their cue: {plan['overruns']} (timing fit: roadmap step 4)")
+        warnings.append(f"{len(plan['overruns'])} line(s) run longer than their cue: {plan['overruns']}; `dubbing fit` reports the "
+                        "tempo each needs (ADR-007), which NARRATE cannot apply until ffmpeg-skill changes tempo on audio-only input")
     unverified = sorted({c["credit"] for c in credits if c.get("terms_verified") is False})
     if unverified:
         warnings.append(f"voice terms not verified, used on the caller's acknowledgement: {unverified}; the credit is derived "
