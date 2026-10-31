@@ -13,6 +13,7 @@ ERROR_TABLE: Dict[str, Tuple[int, bool]] = {
     "OUTPUT_EXISTS": (2, False),             # the output exists and --overwrite was not given
     "OUTPUT_IS_INPUT": (2, False),           # the output path resolves to an input
     "TERMS_UNVERIFIED": (2, False),          # a voice whose terms were not verified, without the caller's acknowledgement
+    "CONSENT_REQUIRED": (2, False),          # a reference voice without a consent record that checks out (ADR-009)
     "FFMPEG_SKILL_UNAVAILABLE": (3, False),  # no usable ffmpeg-skill checkout (missing, or lacks a tool / flag)
     "ENGINE_UNAVAILABLE": (3, False),        # unknown engine id, or the engine is not installed / not running
     "MODEL_NOT_FOUND": (3, False),           # the engine is installed but its weights are not

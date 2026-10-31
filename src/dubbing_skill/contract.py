@@ -11,6 +11,7 @@ from .engines.voicevox import DEFAULT_STYLE_ID as VOICEVOX_DEFAULT_STYLE, VERIFI
 from .errors import ERROR_TABLE
 from .cues import MAX_LINE_CHARS, MAX_LINES
 from .ffmpeg_skill import FLAGS_USED, OPTIONAL_TOOLS, OPTIONAL_USE, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
+from .consent import CONSENT_OPS, CONSENT_SCHEMA, RELATIONS
 from .dub import ALIGN_TOLERANCE, DUB_SCHEMA, DUB_TEMPO, TEMPO_GAP
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, MAX_DUCK_DB, MAX_VOICE_GAIN_DB
 from .ops import NARRATE_SCHEMA
@@ -29,17 +30,37 @@ CUES_INPUT = {
     "translation": "done by the caller before this skill is called; optionally described with --translation-note "
                    "(engine, reviewer) so it is recorded in the provenance. No engine is chosen here",
 }
+# What a consent record must hold (consent.py, ADR-009). Every field is checked; any problem is CONSENT_REQUIRED.
+CONSENT_RECORD = {
+    "schema": CONSENT_SCHEMA,
+    "format": "JSON file",
+    "fields": {"voice_owner.name": "the person whose voice it is",
+               "consenter": {"name": "who consented", "relation": list(RELATIONS)},
+               "granted_at": "ISO 8601 date-time with a UTC offset; not in the future",
+               "expires_at": "optional; past it the record does not count",
+               "revoked": "optional; true never counts",
+               "scope": {"ops": f"the ops covered ({', '.join(CONSENT_OPS)})", "engines": "optional list",
+                         "languages": "optional list of output languages", "purpose": "free text"},
+               "evidence": "[{path (relative to the record), sha256}]: at least one file (signed form, recording of the "
+                           "consent); every file must exist and match",
+               "reference.sha256": "the SHA-256 of the reference clip the consent covers"},
+    "checked": "in the op before any engine work (the record first, then the clip's hash), and again in the worker",
+    "error": "CONSENT_REQUIRED (exit 2): details.reason is no_record | record_not_found | record_invalid | reference_mismatch, "
+             "details.problems lists every problem",
+    "bypass": None,
+    "adr": "docs/decisions.md ADR-009",
+}
 _OP_TOOLS = {
     "narrate": {"description": "Narration from text or cues: one clip per line by a local engine (worker subprocess), laid on "
                                "one mono timeline WAV through ffmpeg-skill (pad + join), validated through ffmpeg-skill/probe",
                 "inputs": ["cues (CUES_INPUT: .json, .srt, .vtt) or plain text (.txt, one utterance per line, back to back)",
-                           "the engine's built-in voice (voicevox: a style id, default 3); a reference voice is refused until "
-                           "the consent gate (step 6)"],
+                           "the engine's built-in voice (voicevox: a style id, default 3), or a reference voice (--reference, "
+                           "chatterbox) with its owner's consent record (--consent, CONSENT_RECORD, ADR-009)"],
                 "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox|voicevox]",
-                         "[--voice <id>]", "[--accept-unverified-voice-terms]", "[--translation-note <json>]", "[--seed 0]",
+                         "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--accept-unverified-voice-terms]", "[--translation-note <json>]", "[--seed 0]",
                          "[--on-overflow fail|shift]",
                          "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
-                "refused": {"--reference / --consent": "NOT_IMPLEMENTED until roadmap step 6 (consent gate, ADR-001)",
+                "refused": {"--reference without a consent record that checks out": "CONSENT_REQUIRED (ADR-009); no flag skips it",
                             "timed cues": "FFMPEG_SKILL_UNAVAILABLE while ffmpeg-skill/pad cannot take audio-only input (ADR-005)",
                             "a VOICEVOX character whose terms were not verified": "TERMS_UNVERIFIED unless "
                                                                                   "--accept-unverified-voice-terms (ADR-006)"},
@@ -56,14 +77,17 @@ _OP_TOOLS = {
             "inputs": ["the programme: a video (or an audio file with a .wav output)",
                        "translated cues (CUES_INPUT), one per source segment at its times; translation is the caller's (ADR-003)",
                        "optional source cues (--source-cues): checked to be the same segments, the source text hash recorded",
-                       "a voice per cue speaker (--speaker-voice SPEAKER=VOICE, else --voice); a reference voice is refused "
-                       "until the consent gate (step 6)"],
+                       "a voice per cue speaker (--speaker-voice SPEAKER=VOICE, else --voice), or a reference voice per "
+                       "speaker (--speaker-reference SPEAKER=PATH, else --reference) with its owner's consent record "
+                       "(--speaker-consent / --consent, CONSENT_RECORD, ADR-009)"],
             "argv": ["dub", "<video|audio>", "<cues.json|cues.srt|cues.vtt>", "--lang <en>", "-o <out.mp4|out.mov|out.mkv|out.wav>",
                      "[--source-cues <src.srt>]", "[--engine chatterbox]", "[--voice <id>]", "[--speaker-voice <speaker>=<id>]...",
+                     "[--reference <voice.wav> --consent <consent.json>]", "[--speaker-reference <speaker>=<voice.wav>]...",
+                     "[--speaker-consent <speaker>=<consent.json>]...",
                      "[--audio-stream 0]", f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|keep]",
                      f"[--duck {DEFAULT_DUCK_DB:g}]", f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--translation-note <json>]",
                      "[--seed 0]", "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
-            "refused": {"--reference / --consent": "NOT_IMPLEMENTED until roadmap step 6 (consent gate, ADR-001)",
+            "refused": {"a reference voice without a consent record that checks out": "CONSENT_REQUIRED (ADR-009); no flag skips it",
                         "plain text": "INVALID_ARGUMENT: each line replaces the dialogue of its segment, so cues are needed",
                         "a line longer than its room": "TIMING_OVERFLOW unless --on-unfit keep (the original dialogue stays there)"},
             "schema": DUB_SCHEMA,
@@ -172,9 +196,11 @@ def contract() -> Dict[str, Any]:
                     "selection_adr": "docs/decisions.md ADR-001",
                     "optional": True,
                     "statuses": ["OK", "MISSING", "INCOMPATIBLE"]},
-        "policy": {"voice_cloning": "a reference voice (or a model trained on a real person's voice) requires a recorded "
-                                    "consent of that person (OS ADR-012); until roadmap step 6 verifies such a record, every op "
-                                    "refuses a reference voice (NOT_IMPLEMENTED) before reading it, and so does every engine",
+        "policy": {"voice_cloning": "a reference voice (or a model trained on a real person's voice) is used only with a "
+                                    "consent record of that person that checks out (CONSENT_RECORD, ADR-009): the op verifies it "
+                                    "before any engine work, and the engine verifies it again in the worker; otherwise "
+                                    "CONSENT_REQUIRED. There is no flag, option or environment variable that skips the gate",
+                   "consent_record": CONSENT_RECORD,
                    "credit": "an engine's credit (credit_required) is carried into the provenance and must appear in the "
                              "published video's description or credits; VOICEVOX credits are resolved per voice "
                              "('VOICEVOX:<character>', with the speaker and the character) into each clip's provenance "
@@ -183,7 +209,7 @@ def contract() -> Dict[str, Any]:
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance, and "
                                 "Chatterbox's Perth mark is read back from every clip (a clip where it is not found is refused)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "voice", "text.sha256", "translation",
-                                  "watermark", "credits", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
+                                  "watermark", "credits", "consent", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
                        "per_clip": True,
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["dubbing", "<command>", "...", "--json"], "network": False, "shell": False,

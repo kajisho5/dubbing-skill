@@ -578,3 +578,31 @@ def fake_voicevox(**kw: Any) -> Iterator[FakeVoicevox]:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def make_consent(directory: str, clip: str, name: str = "consent.json", **overrides: Any) -> str:
+    """A consent record (dubbing/consent@1, ADR-009) for the reference `clip`, with one evidence file next to it, that passes the
+    gate; `overrides` replace top-level fields (None removes one). Returns the record's path."""
+    import hashlib
+    evidence = os.path.join(directory, name + ".form.txt")
+    Path(evidence).write_text("I, Hanako Yamada, agree that my voice may be used for this dub.\n", encoding="utf-8")
+    sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()  # noqa: E731
+    doc: Dict[str, Any] = {
+        "schema": "dubbing/consent@1",
+        "voice_owner": {"name": "山田花子"},
+        "consenter": {"name": "山田花子", "relation": "self"},
+        "granted_at": "2026-01-15T10:00:00+09:00",
+        "expires_at": None,
+        "revoked": False,
+        "scope": {"ops": ["narrate", "dub", "audio_description"], "purpose": "conference video, test"},
+        "evidence": [{"path": os.path.basename(evidence), "sha256": sha(evidence)}],
+        "reference": {"sha256": sha(clip)},
+    }
+    for k, v in overrides.items():
+        if v is None:
+            doc.pop(k, None)
+        else:
+            doc[k] = v
+    path = os.path.join(directory, name)
+    Path(path).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    return path

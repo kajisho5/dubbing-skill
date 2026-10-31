@@ -237,8 +237,8 @@ class DubOpTests(unittest.TestCase):
         self.refused(good, "INVALID_ARGUMENT", speaker_voices={"A": ""})
         self.refused(good, "INVALID_ARGUMENT", lang="xx")
         self.refused(good, "INVALID_ARGUMENT", engine="voicevox")                           # VOICEVOX does not dub (ADR-001)
-        e = self.refused(good, "NOT_IMPLEMENTED", reference_path=self.programme)
-        self.assertEqual((e.details["roadmap_step"], e.details["reference_read"], e.details["op"]), (6, False, "dub"))
+        e = self.refused(good, "CONSENT_REQUIRED", reference_path=self.programme)
+        self.assertEqual((e.details["reason"], e.details["reference_read"]), ("no_record", False))
         Path(self.out).write_bytes(b"x")
         self.refused(good, "OUTPUT_EXISTS")
 
@@ -309,7 +309,7 @@ class DubCliAndContractTests(unittest.TestCase):
                           "--speaker-voice", "A=y", "--json")
         self.assertIn("twice", doc["error"]["message"])
         rc, doc = run_cli("dub", self.programme, self.cues, "--lang", "en", "-o", out, "--reference", self.programme, "--json")
-        self.assertEqual((rc, doc["error"]["code"]), (5, "NOT_IMPLEMENTED"))
+        self.assertEqual((rc, doc["error"]["code"]), (2, "CONSENT_REQUIRED"))
         rc, doc = run_cli("dub", self.programme, self.cues, "--lang", "en", "-o", out, "--duck", "50", "--json")
         self.assertEqual((rc, doc["error"]["code"]), (2, "INVALID_ARGUMENT"))
         self.assertFalse(os.path.exists(out))
@@ -323,7 +323,7 @@ class DubCliAndContractTests(unittest.TestCase):
         self.assertEqual(tool["schema"], DUB_SCHEMA)
         self.assertEqual(tool["limits"]["tempo"], 1.0)
         self.assertEqual(tool["engines"], ["chatterbox", "style_bert_vits2"])
-        self.assertIn("--reference / --consent", tool["refused"])
+        self.assertIn("a reference voice without a consent record that checks out", tool["refused"])
         self.assertIn("cut", TOOLS_USED)
         self.assertEqual(FLAGS_USED["cut"], ("input", "output", "start", "end", "accurate", "json"))
         for flag in ("music_volume", "gain", "replace", "audio_stream"):

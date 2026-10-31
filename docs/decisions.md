@@ -379,3 +379,55 @@ Roadmap step 5: replace the dialogue through ffmpeg-skill `audio --replace`, don
 - A short fade at each piece boundary, once ffmpeg-skill can fade a piece's start and end without fading the whole mix. Today the programme steps down and up by `--duck` dB at the line's edges.
 - Loudness: normalise each line to a target through ffmpeg-skill/loudness. It refuses clips shorter than about 0.4 s, as "silent".
 - Voice conversion of the original speaker (OpenVoice V2, ADR-001) instead of TTS. It needs the consent gate (step 6).
+
+## ADR-009 Consent gate: a reference voice only with a verified consent record of its owner, no way to skip it
+
+### Context
+
+Roadmap step 6: refuse a reference voice without a consent record. It is done when a security test covers it. OS ADR-012 and ADR-001 require a recorded consent of the person whose voice is cloned. Until now every op refused `--reference` with `NOT_IMPLEMENTED` (ADR-005). Chatterbox clones from a reference clip, passed to `generate(..., audio_prompt_path=...)` (chatterbox `mtl_tts.py`, master, read 2026-10-31). Style-Bert-VITS2 clones by training a model on a voice (step 8).
+
+### Decision
+
+- **The record.** It is a JSON file, schema `dubbing/consent@1` (`consent.py`). The contract publishes it as `policy.consent_record`. The fields:
+  - `voice_owner.name`: whose voice it is.
+  - `consenter.name` and `consenter.relation`: who consented, with the relation `self`, `legal_guardian` or `authorised_representative`. `self` must name the owner.
+  - `granted_at`: ISO 8601 with a UTC offset, and not in the future (5 minutes of clock slack).
+  - Optional `expires_at` and `revoked`.
+  - `scope`: `ops` (required), and optional `engines`, `languages` and `purpose`.
+  - `evidence`: at least one file, such as the signed form or a recording of the consent. Each entry has a path relative to the record and a SHA-256.
+  - `reference.sha256`: the SHA-256 of the clip the consent covers.
+- **The checks.** Every field is checked. Every problem is collected, and any problem refuses the use.
+  - Every evidence file must exist, be non-empty, not be the record itself, and match its hash. An edited form no longer counts.
+  - The scope must cover the op, the engine and the output language.
+  - The record is checked before the reference clip is read. Then the clip's hash must equal `reference.sha256`. A different clip is refused (`reason: reference_mismatch`).
+- **One error code.** `CONSENT_REQUIRED` (exit 2, not retryable) is new. `details.reason` is `no_record`, `record_not_found`, `record_invalid` or `reference_mismatch`. `details.problems` lists every problem, and `details.bypass` says there is none.
+  - A record without a reference is `INVALID_ARGUMENT`.
+  - An engine that cannot clone (VOICEVOX, Kokoro) refuses a reference with `INVALID_ARGUMENT`, whatever the record says.
+- **Where it runs.**
+  1. In the op, before anything is read. A reference without `--consent` is refused before the engine is even selected (`voice_request_fields`). DUB does this per speaker and names the speaker.
+  2. In the engine's checks (`Engine.check_consent`, called from `check_request`), before any engine work. The result is remembered per engine instance, so one op checks each record and clip once. The reference is then probed through ffmpeg-skill: it must be audio of at least 1 s.
+  3. Again in the worker, which is a new engine instance in its own process. A record withdrawn or edited between the op's check and the worker is refused there, before `generate` runs.
+- **No bypass.** No CLI option, request field, environment variable or contract setting turns the gate off, and none will be added. A test checks every CLI option and request field name for words like skip, bypass, force, ignore and trust. It also checks that no `DUBBING_*CONSENT*` variable exists in the source.
+- **Flags.**
+  - NARRATE: `--reference PATH --consent PATH`.
+  - DUB: `--reference` / `--consent` for every speaker, and `--speaker-reference SPEAKER=PATH` / `--speaker-consent SPEAKER=PATH` per cue speaker. A speaker with its own reference needs its own record. A `--speaker-consent` without a reference is `INVALID_ARGUMENT`.
+  - A line has either the built-in voice or a reference, never both.
+- **Receipt.** Each clip's provenance gains `consent`. It holds the record's hash, the owner, the consenter and their relation, `granted_at`, `expires_at`, the scope, each evidence file's name and hash, the clip's hash, and what it was verified for. The output's provenance lists each distinct record once. The evidence's contents are never copied. `provenance.fields` gains `consent`.
+- **Not decided here.**
+  - Whether the evidence is legally sufficient. That is the user's responsibility. The skill checks that the evidence exists and has not changed.
+  - Signing records. A hash ties the record to its files, not to a person.
+
+### Tests
+
+- `tests/test_consent.py`, 24 tests. Each covers one problem: 22 record problems, tampered evidence, another clip, a missing or invalid record, the record checked before the clip is opened, and a record without a reference.
+- Engines that cannot clone refuse a reference. Cloning engines need a record.
+- The worker passes the reference as `audio_prompt_path` only with a record. The worker refuses a record revoked after the op's check, before `generate`.
+- NARRATE and DUB record the consent, and every refusal comes before the engine runs. DUB refusals name the speaker. A reference shorter than 1 s is refused. The output is never the reference.
+- No bypass in the CLI options, the request fields, the environment or the contract.
+- `tests/test_narrate.py`'s consent tests now expect `CONSENT_REQUIRED` instead of `NOT_IMPLEMENTED`.
+- Integration: the reference is probed through the real ffmpeg-skill.
+
+### Follow-ups
+
+- Style-Bert-VITS2 models trained on a real person's voice take the same record (step 8).
+- An optional signature over the record (a detached signature checked against a key the user names), if a production needs to know who wrote the record.

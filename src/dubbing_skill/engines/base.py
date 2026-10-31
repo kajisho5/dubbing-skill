@@ -20,7 +20,8 @@ OK, MISSING, INCOMPATIBLE = "OK", "MISSING", "INCOMPATIBLE"
 STATUSES = (OK, MISSING, INCOMPATIBLE)
 OPS = ("narrate", "dub", "audio_description")
 KINDS = ("python", "local_http")
-CONSENT_STEP = 6                              # roadmap step of the consent gate for voice cloning (ADR-001)
+CONSENT_STEP = 6                              # roadmap step of the consent gate for voice cloning (ADR-001, ADR-009)
+CONSENT_PARAM = "consent_path"                # EngineRequest.params key: the consent record for reference_audio
 WORKER_ENV = "DUBBING_IN_WORKER"              # set by the worker process only; engine code is imported nowhere else
 
 
@@ -71,7 +72,7 @@ class EngineRequest:
     lang: str
     output_path: str
     voice: Optional[str] = None               # engine voice / speaker id
-    reference_audio: Optional[str] = None     # voice cloning; refused until the consent gate (step 6) exists
+    reference_audio: Optional[str] = None     # voice cloning: needs params[CONSENT_PARAM], verified here and in the worker
     params: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -147,17 +148,33 @@ class Engine:
 
     def check_request(self, req: EngineRequest) -> None:
         """Checks that need no engine code: run by the op before any work, and again in the worker. A reference voice
-        (voice cloning) is refused until the consent gate exists (ADR-001, roadmap step 6), whatever the engine."""
+        (voice cloning) is accepted only by an engine that can clone, and only with a consent record that checks out
+        (consent.verify_consent, ADR-009), whatever the engine; there is no way to skip it."""
         if req.op not in self.spec.ops:
             raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} does not serve op {req.op!r}",
                                {"engine": self.id, "ops": list(self.spec.ops)})
-        if req.reference_audio is not None:
-            raise DubbingError("NOT_IMPLEMENTED", "a reference voice (voice cloning) needs a recorded consent of that person "
-                               "(ADR-001); the consent gate arrives in roadmap step 6 and no reference voice is accepted before "
-                               "then", {"engine": self.id, "roadmap_step": CONSENT_STEP, "policy": "voice_cloning"})
         if req.lang not in self.spec.languages:
             raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} does not speak {req.lang!r}",
                                {"engine": self.id, "lang": req.lang, "languages": list(self.spec.languages)})
+        self.check_consent(req)
+
+    def check_consent(self, req: EngineRequest) -> Optional[Dict[str, Any]]:
+        """The verified consent summary for a request with a reference voice, None without one. Verified once per engine
+        instance (one op, or one worker run) for each record, clip, op and language."""
+        record = req.params.get(CONSENT_PARAM) if isinstance(req.params, dict) else None
+        if req.reference_audio is None:
+            if record:
+                raise DubbingError("INVALID_ARGUMENT", "a consent record was given without a reference voice", {"engine": self.id})
+            return None
+        if not self.spec.voice_cloning:
+            raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} cannot speak in a reference voice (no voice cloning)",
+                               {"engine": self.id, "policy": "voice_cloning"})
+        from ..consent import verify_consent
+        memo = self.__dict__.setdefault("_consent_memo", {})
+        key = (record, req.reference_audio, req.op, req.lang)
+        if key not in memo:
+            memo[key] = verify_consent(record, req.reference_audio, req.op, self.id, req.lang)
+        return memo[key]
 
     def process(self, req: EngineRequest) -> EngineResult:
         self.check_request(req)

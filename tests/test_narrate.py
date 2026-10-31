@@ -231,13 +231,14 @@ class ChatterboxWorkerTests(unittest.TestCase):
 
 
 class ConsentGateTests(unittest.TestCase):
-    """Security: no reference voice reaches an engine before the consent gate of roadmap step 6 exists."""
+    """Security: a reference voice reaches an engine only with a consent record that checks out (ADR-009); without one
+    nothing is read and the engine never runs. More in tests/test_consent.py."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    def test_op_refuses_a_reference_before_reading_anything(self):
+    def test_op_refuses_a_reference_without_consent_before_reading_anything(self):
         script = write(os.path.join(self.tmp.name, "t.txt"), "hello\n")
         ref = write_tone_wav(os.path.join(self.tmp.name, "someone.wav"))
         out = os.path.join(self.tmp.name, "out.wav")
@@ -247,29 +248,30 @@ class ConsentGateTests(unittest.TestCase):
         def spy(path, *a, **kw):
             opened.append(os.path.abspath(str(path)))
             return real_open(path, *a, **kw)
-        for kw in ({"reference_path": ref}, {"consent_path": ref}, {"reference_path": ref, "consent_path": ref}):
+        for kw, code in (({"reference_path": ref}, "CONSENT_REQUIRED"), ({"consent_path": ref}, "INVALID_ARGUMENT")):
             with chatterbox_ready(self.tmp.name) as site, mock.patch("builtins.open", spy), self.assertRaises(DubbingError) as e:
                 narrate(NarrateRequest(script_path=script, output_path=out, lang="en", **kw), skill=WaveSkill())
-            self.assertEqual((e.exception.code, e.exception.exit_code), ("NOT_IMPLEMENTED", 5))
-            self.assertEqual((e.exception.details["roadmap_step"], e.exception.details["reference_read"]), (6, False))
+            self.assertEqual((e.exception.code, e.exception.exit_code), (code, 2))
+            if code == "CONSENT_REQUIRED":
+                self.assertEqual((e.exception.details["reason"], e.exception.details["reference_read"]), ("no_record", False))
             self.assertNotIn(os.path.abspath(ref), opened)
             self.assertEqual(fake_chatterbox_calls(site), [])
         self.assertFalse(os.path.exists(out))
         self.assertEqual(leftovers(self.tmp.name), [])
 
-    def test_cli_refuses_a_reference(self):
+    def test_cli_refuses_a_reference_without_consent(self):
         script = write(os.path.join(self.tmp.name, "t.txt"), "hello\n")
         rc, doc = run_cli("narrate", script, "--lang", "en", "-o", os.path.join(self.tmp.name, "o.wav"), "--reference",
                           os.path.join(self.tmp.name, "nobody.wav"), "--json")
-        self.assertEqual((rc, doc["ok"], doc["error"]["code"]), (5, False, "NOT_IMPLEMENTED"))
+        self.assertEqual((rc, doc["ok"], doc["error"]["code"]), (2, False, "CONSENT_REQUIRED"))
 
-    def test_every_engine_refuses_a_reference_in_the_worker(self):
+    def test_every_engine_refuses_a_reference_without_consent_in_the_worker(self):
+        ref = write_tone_wav(os.path.join(self.tmp.name, "someone.wav"))
         with chatterbox_ready(self.tmp.name) as site:
-            req = EngineRequest("narrate", "hello", "en", os.path.join(self.tmp.name, "o.wav"),
-                                reference_audio=os.path.join(self.tmp.name, "someone.wav"))
+            req = EngineRequest("narrate", "hello", "en", os.path.join(self.tmp.name, "o.wav"), reference_audio=ref)
             with self.assertRaises(DubbingError) as e:
                 run_engine("chatterbox", req, 120, self.tmp.name)
-            self.assertEqual(e.exception.code, "NOT_IMPLEMENTED")
+            self.assertEqual(e.exception.code, "CONSENT_REQUIRED")
             self.assertEqual([c for c in fake_chatterbox_calls(site) if c["call"] == "generate"], [])
         for eid in ("voicevox", "style_bert_vits2", "kokoro"):
             with self.assertRaises(DubbingError, msg=eid) as e:
@@ -464,8 +466,8 @@ class NarrateContractTests(unittest.TestCase):
         tool = next(t for t in c["tools"] if t["tool_id"] == "dubbing/narrate")
         self.assertTrue(tool["implemented"])
         self.assertEqual(tool["schema"], "dubbing/narrate@1")
-        self.assertIn("--reference / --consent", tool["refused"])
-        self.assertNotIn("[--reference <voice.wav> --consent <consent.json>]", tool["argv"])
+        self.assertIn("--reference without a consent record that checks out", tool["refused"])
+        self.assertIn("[--reference <voice.wav> --consent <consent.json>]", tool["argv"])
         ff = next(d for d in c["dependencies"] if d["id"] == "ffmpeg-skill")
         self.assertIn("transition", ff["flags"]["join"])
         self.assertEqual(ff["optional_tools"]["pad"]["flags"], ["input", "output", "start", "end", "json"])

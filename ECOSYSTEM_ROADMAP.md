@@ -33,7 +33,7 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
   - Done when: unit tests on overflow/underflow
 - [x] **5. DUB op** ([#7](https://github.com/kajisho5/dubbing-skill/pull/7), [docs/decisions.md](docs/decisions.md) ADR-008; `dubbing dub <programme> <translated cues>`: one clip per cue, fitted to its source segment at tempo 1.0, spoken over the programme's own sound lowered by `--duck` dB, back into the video through ffmpeg-skill audio / cut / join / `audio --replace`; output audio and picture checked to match) — replace dialogue via ffmpeg-skill audio --replace
   - Done when: A/V duration match
-- [ ] **6. Consent gate for voice cloning** — refuse a reference voice without a consent record
+- [x] **6. Consent gate for voice cloning** ([#8](https://github.com/kajisho5/dubbing-skill/pull/8), [docs/decisions.md](docs/decisions.md) ADR-009; `dubbing/consent@1` record: who consented, when, scope, evidence files and the reference clip, all hash-checked; `CONSENT_REQUIRED` before any engine work and again in the worker; no bypass; `tests/test_consent.py`) — refuse a reference voice without a consent record
   - Done when: security test
 - [ ] **7. AUDIO_DESCRIPTION op** — narration only inside caller-given gaps, ducked
   - Done when: placement test

@@ -27,13 +27,15 @@ def sha256_text(text: str) -> str:
 def build_provenance(*, op: str, engine: Dict[str, Any], text: str, output_path: Optional[str], parameters: Dict[str, Any],
                      voice: Optional[str] = None, translation: Optional[Dict[str, Any]] = None,
                      ffmpeg_skill: Optional[Dict[str, Any]] = None, watermark: Optional[Dict[str, Any]] = None,
-                     credits: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                     credits: Optional[List[Dict[str, Any]]] = None, consent: Any = None) -> Dict[str, Any]:
     """`engine` is an engine report (Engine.report()); only publishable fields are copied (no local paths, no URLs).
     `translation` is what the caller says about the text it supplied (ADR-003); it is recorded, never produced here.
     `watermark` is what was observed on this output (the engine's mark read back), next to the engine's declared
     `engine.watermark`; None when the engine embeds none. `credits` are the credits this output must carry, resolved
     per voice (VOICEVOX: {"credit": "VOICEVOX:<character>", "character", "speaker", "style", "terms_verified", ...},
-    ADR-006); [] when the engine has no credit obligation."""
+    ADR-006); [] when the engine has no credit obligation. `consent` is the verified consent record of a reference voice
+    (consent.verify_consent, ADR-009: who, when, scope, evidence hashes, the clip's hash), or a list of them for an output
+    made of several clips; None when no reference voice was used."""
     return {
         "skill": {"id": SKILL_ID, "version": __version__},
         "op": op,
@@ -43,6 +45,7 @@ def build_provenance(*, op: str, engine: Dict[str, Any], text: str, output_path:
         "translation": dict(translation) if translation else {"provided_by": "caller", "engine": None},
         "watermark": dict(watermark) if watermark else None,
         "credits": [dict(c) for c in credits or []],
+        "consent": consent,
         "output": {"sha256": sha256_file(output_path)} if output_path else None,
         "parameters": dict(parameters),
         "ffmpeg_skill": None if ffmpeg_skill is None else {k: ffmpeg_skill.get(k) for k in ("version", "contract_version")},

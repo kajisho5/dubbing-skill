@@ -54,7 +54,7 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
   - `--voice` is a style id, the API's `speaker`. The default is 3, ずんだもん ノーマル.
   - Every clip records its speaker, character and credit (`VOICEVOX:ずんだもん`) under `provenance.credits`, and `obligations.credit` lists what the published video must show.
   - Only characters whose terms were verified are used by default: ずんだもん and 四国めたん, matched by uuid and name. Any other character is refused with `TERMS_UNVERIFIED`. Pass `--accept-unverified-voice-terms` only after you have checked its terms yourself. Its credit is then recorded as unverified.
-- **Reference voice.** `--reference` / `--consent` (voice cloning) are refused with `NOT_IMPLEMENTED` until the consent gate of step 6 exists. Nothing is read.
+- **Reference voice.** `--reference voice.wav --consent consent.json` speaks in a person's voice (Chatterbox) only when that person's consent record checks out (below). Without a record nothing is read and the op fails with `CONSENT_REQUIRED`.
 
 ## DUB
 
@@ -62,7 +62,7 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
 
 - **Cues.** The translated cues (`.json`, `.srt`, `.vtt`), one per source segment, at the source's times, already in `--lang`. This skill does not translate ([ADR-003](docs/decisions.md)). `--source-cues` names the source cues: they must be the same segments (count, and times within 0.1 s), and each line records the hash of the source text it translates.
 - **Output.** A video (`.mp4`, `.mov`, `.mkv`, the picture stream-copied) or the new programme audio alone (`.wav`). `--audio-stream` picks the programme's audio stream.
-- **Voices.** `--speaker-voice SPEAKER=VOICE` per cue speaker, else `--voice`, else the engine's default. Engines: Chatterbox (default) and Style-Bert-VITS2 (step 8). A reference voice waits for the consent gate (step 6).
+- **Voices.** `--speaker-voice SPEAKER=VOICE` per cue speaker, else `--voice`, else the engine's default. Engines: Chatterbox (default) and Style-Bert-VITS2 (step 8). A speaker can speak in their own voice with `--speaker-reference SPEAKER=voice.wav --speaker-consent SPEAKER=consent.json` (or `--reference` / `--consent` for every speaker), only with that person's consent record (below).
 - **Timing.** Each line is fitted to its cue with the timing fit at tempo 1.0, because ffmpeg-skill cannot change the tempo of audio alone. `--max-overrun` gives a line up to 5 s past its cue end, never past the next cue or the programme's end. A line that still does not fit fails the op with `TIMING_OVERFLOW`, or keeps the original dialogue there with `--on-unfit keep`.
 - **Mix.** The programme audio is cut at every line's start and end (ffmpeg-skill/cut, sample-exact). Under each line it is lowered by `--duck` dB (default 12) and the line is added at `--voice-gain` dB (default 0) (ffmpeg-skill/audio `--music`). Everywhere else it is untouched. The pieces are joined back (ffmpeg-skill/join) and replace the video's audio (ffmpeg-skill/audio `--replace`). No silence is made.
 - **Validation.** The output must last as long as the programme, and its audio as long as its picture, within max(0.1 s, 1 %) (`output.av_delta`).
@@ -93,7 +93,31 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
 
 Weights are fetched once by you into the Hugging Face cache, or into `DUBBING_CHATTERBOX_MODEL_DIR` / `DUBBING_KOKORO_MODEL_DIR`. `doctor` prints the exact install line for each engine. Chatterbox's Japanese text path depends on pykakasi (GPL-3.0-or-later), which is why it belongs in its own virtual environment rather than this package's.
 
-Cloning a real person's voice needs a recorded consent from that person. Roadmap step 6 enforces it. Until then every op and every engine refuses a reference voice. Credits and watermarks go into the provenance of every clip.
+Cloning a real person's voice needs a recorded consent from that person (below). Credits and watermarks go into the provenance of every clip.
+
+## Consent for voice cloning ([ADR-009](docs/decisions.md))
+
+A reference voice is used only with a consent record (`dubbing/consent@1` JSON) of the person whose voice it is. There is no flag, option or environment variable that skips this.
+
+```json
+{
+  "schema": "dubbing/consent@1",
+  "voice_owner": {"name": "山田花子"},
+  "consenter": {"name": "山田花子", "relation": "self"},
+  "granted_at": "2026-10-01T10:00:00+09:00",
+  "expires_at": null,
+  "scope": {"ops": ["dub"], "engines": ["chatterbox"], "languages": ["en"], "purpose": "conference talk, English dub"},
+  "evidence": [{"path": "hanako-consent-form.pdf", "sha256": "<sha256 of the file>"}],
+  "reference": {"sha256": "<sha256 of voice.wav>"}
+}
+```
+
+- **Who, when, what.** The record says whose voice it is, who consented (`self`, `legal_guardian` or `authorised_representative`), when (not in the future, not expired, not revoked), and for which ops, engines and languages.
+- **Evidence.** At least one file, such as the signed form or a recording of the consent. Its path is relative to the record. Every file must exist and match its SHA-256, so an edited form no longer counts.
+- **The clip.** `reference.sha256` ties the record to one reference clip. Any other clip is refused.
+- **When it is checked.** The record is checked first, then the clip's hash, before any engine work, and again in the engine's worker. Any problem is `CONSENT_REQUIRED` (exit 2), and `details.problems` lists all of them.
+- **Receipt.** The verified record goes into each clip's provenance: who, when, scope, the hashes of the evidence and of the clip. The evidence's contents are never copied.
+- **Engines.** Engines that cannot clone (VOICEVOX, Kokoro) refuse a reference voice whatever the record says.
 
 ## ffmpeg-skill
 
@@ -114,6 +138,7 @@ Unit tests need no engine, no weights, no FFmpeg and no network:
 - Package lookups are mocked, and the Hugging Face cache is a temporary directory.
 - VOICEVOX and Style-Bert-VITS2 are replaced by fake apps on loopback. The fake VOICEVOX answers `/version`, `/speakers`, `/audio_query` and `/synthesis` in the shapes of voicevox_engine 0.26.0, and refuses any other request shape.
 - NARRATE runs the real worker on a fake `chatterbox` package that makes tones or silence of a known length.
+- The consent gate is tested as a security boundary: every way a record can fail, the record checked before the clip is read and again in the worker, and no option that skips it.
 - DUB runs on a WAV programme with WaveSkill: the programme is checked sample for sample between lines, and under each line it must be the programme lowered by `--duck` plus the line.
 - Timing fit is tested as pure decisions (exact fit, speed-up, over the limit, padding, empty and zero-length slots, 2000 lines) and on WAVs with non-ASCII names.
 - A WAV-only stand-in replaces ffmpeg-skill.

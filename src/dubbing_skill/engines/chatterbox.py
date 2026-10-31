@@ -104,8 +104,11 @@ class ChatterboxEngine(Engine):
         super().check_request(req)
         if req.voice is not None and req.voice not in VOICES:
             raise DubbingError("INVALID_ARGUMENT", f"chatterbox has one built-in voice ({', '.join(VOICES)}); another voice "
-                               "is a reference clip, which needs a consent record (roadmap step 6)",
+                               "is a reference clip (--reference) with its consent record (--consent, ADR-009)",
                                {"engine": self.id, "voice": req.voice, "voices": list(VOICES)})
+        if req.voice is not None and req.reference_audio is not None:
+            raise DubbingError("INVALID_ARGUMENT", "a line has either the built-in voice or a reference voice, not both",
+                               {"engine": self.id, "voice": req.voice})
         if not req.text.strip():
             raise DubbingError("INVALID_ARGUMENT", "empty text", {"engine": self.id})
 
@@ -130,7 +133,9 @@ class ChatterboxEngine(Engine):
             params.update({k: float(req.params[k]) for k in DEFAULT_PARAMS if req.params.get(k) is not None})
             seed = int(req.params.get("seed") or 0)
             torch.manual_seed(seed)
-            wav = model.generate(req.text, language_id=req.lang, **params)
+            consent = self.check_consent(req)             # verified again here, in the worker, before the clip is read
+            prompt = {"audio_prompt_path": req.reference_audio} if req.reference_audio else {}
+            wav = model.generate(req.text, language_id=req.lang, **prompt, **params)
             mono = wav.squeeze(0).detach().cpu()
             samples = mono.tolist()
             if not samples:
@@ -142,7 +147,8 @@ class ChatterboxEngine(Engine):
                                    "without it is never returned (ADR-001)", {"engine": self.id, "watermark": watermark})
             results.append(EngineResult(output_path=req.output_path, engine_version=str(info.get("version")), model=MODEL_FILE,
                                         sample_rate=rate, extra={"seed": seed, "device": str(device), "parameters": params,
-                                                                 "voice": req.voice or VOICES[0], "watermark": watermark,
+                                                                 "voice": "reference" if consent else (req.voice or VOICES[0]),
+                                                                 "watermark": watermark, "consent": consent,
                                                                  "model_snapshot": os.path.basename(str(snapshot))}))
         return results
 

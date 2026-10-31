@@ -3,9 +3,10 @@ spoken by a local engine (Chatterbox, or VOICEVOX since step 3, ADR-006), one cl
 through ffmpeg-skill.
 
 NARRATE, step by step:
-  1. checks     numbers and policies; a reference voice is refused before anything is read (consent gate, ADR-001:
-                roadmap step 6); the script is a regular file; the output is a .wav that is not the script and does
-                not exist (unless --overwrite) in a directory that exists
+  1. checks     numbers and policies; the script is a regular file; the output is a .wav that is not an input and does
+                not exist (unless --overwrite) in a directory that exists. A reference voice needs a consent record that
+                checks out (consent gate, ADR-009): verified in step 3 by the engine's checks, before any engine work, and
+                again in the worker
   2. script     parsed and checked (cues.py): every line non-empty and within the limits, cues in order and apart
   3. engine     the selected engine serves narrate, reports OK and accepts every line (language, voice), else
                 ENGINE_UNAVAILABLE / MODEL_NOT_FOUND / INVALID_ARGUMENT, before any media work. VOICEVOX: the voice
@@ -41,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import SKILL_ID, __version__
 from .cues import Script, parse_script
 from .engines import DEFAULT_ENGINE, engines_for, get_engine
-from .engines.base import CONSENT_STEP, OK, Engine, EngineRequest
+from .engines.base import CONSENT_PARAM, OK, Engine, EngineRequest
 from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill, SkillInfo
 from .provenance import build_provenance, sha256_text
@@ -62,7 +63,7 @@ class NarrateRequest:
     lang: str
     engine: Optional[str] = None
     voice: Optional[str] = None
-    reference_path: Optional[str] = None      # refused until the consent gate exists (roadmap step 6)
+    reference_path: Optional[str] = None      # a reference voice (cloning): only with its consent record (ADR-009)
     consent_path: Optional[str] = None
     translation_note: Optional[Dict[str, Any]] = None
     seed: int = 0
@@ -74,19 +75,42 @@ class NarrateRequest:
     offline: bool = False
 
 
-def refuse_reference(reference: Any, consent: Any, op: str = "narrate") -> None:
-    """Voice cloning needs a recorded consent of the person whose voice it is (ADR-001, OS ADR-012). Until roadmap step 6
-    verifies such a record, no reference voice is accepted: refused here, before the file is even looked at, and again
-    by every engine in the worker (Engine.check_request)."""
-    if reference or consent:
-        raise DubbingError("NOT_IMPLEMENTED", "a reference voice (voice cloning) needs a recorded consent of that person; the "
-                           "consent gate arrives in roadmap step 6 and no reference voice is accepted before then. Use the "
-                           "engine's built-in voice (no --reference)",
-                           {"roadmap_step": CONSENT_STEP, "policy": "voice_cloning", "reference_read": False, "op": op})
+MIN_REFERENCE_SECONDS = 1.0         # a reference voice shorter than this cannot carry a voice
 
 
-def consent_gate(req: NarrateRequest) -> None:
-    refuse_reference(req.reference_path, req.consent_path, "narrate")
+def voice_request_fields(reference: Optional[str], consent: Optional[str]) -> Tuple[Optional[str], Dict[str, Any]]:
+    """(reference_audio, params) for an engine request with an optional reference voice. A reference without a consent
+    record, or a record without a reference, is refused here, before anything is read; the record itself is verified
+    by the engine's checks (Engine.check_consent, ADR-009)."""
+    if consent and not reference:
+        raise DubbingError("INVALID_ARGUMENT", "--consent was given without a reference voice (--reference)", {})
+    if not reference:
+        return None, {}
+    if not consent:
+        raise DubbingError("CONSENT_REQUIRED", "a reference voice (voice cloning) needs the consent record of the person whose "
+                           "voice it is (--consent: who consented, when, for what, and the evidence files; ADR-009). There is "
+                           "no way to skip this", {"reason": "no_record", "policy": "voice_cloning", "reference_read": False,
+                                                   "adr": "docs/decisions.md ADR-009"})
+    return os.path.abspath(reference), {CONSENT_PARAM: os.path.abspath(consent)}
+
+
+def check_reference(skill: Any, path: str) -> Dict[str, Any]:
+    """The reference voice through ffmpeg-skill/probe: readable, with audio, at least MIN_REFERENCE_SECONDS long."""
+    try:
+        facts = skill.probe(path)
+    except DubbingError as e:
+        raise DubbingError("UNSUPPORTED_MEDIA", f"the reference voice cannot be read: {e.message}", {"reference": path})
+    a = facts.get("audio") if isinstance(facts.get("audio"), dict) else {}
+    if not a or float(facts.get("duration") or 0.0) < MIN_REFERENCE_SECONDS:
+        raise DubbingError("UNSUPPORTED_MEDIA", f"the reference voice needs audio of at least {MIN_REFERENCE_SECONDS:g}s",
+                           {"reference": path, "duration": facts.get("duration")})
+    return facts
+
+
+def not_an_output(dst: str, *inputs: Optional[str]) -> None:
+    for p in inputs:
+        if p and (os.path.realpath(dst) == os.path.realpath(p) or (os.path.exists(dst) and os.path.exists(p) and os.path.samefile(dst, p))):
+            raise DubbingError("OUTPUT_IS_INPUT", "the output path is an input; inputs are never modified", {"output": dst})
 
 
 def _check_numbers(req: NarrateRequest) -> None:
@@ -301,23 +325,35 @@ def unique_credits(per_clip: Any) -> List[Dict[str, Any]]:
     return list(out.values())
 
 
+def unique_consents(per_clip: Any) -> Optional[List[Dict[str, Any]]]:
+    """Each distinct consent record once (None when no clip used a reference voice)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for c in per_clip:
+        if isinstance(c, dict):
+            out.setdefault(c["record_sha256"] + c["reference_sha256"], c)
+    return list(out.values()) or None
+
+
 def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     """NARRATE: the script at `req.script_path` spoken in `req.lang` and laid on one mono WAV at `req.output_path`.
     `skill` is the ffmpeg-skill handle (located from `req.ffmpeg_skill_dir` when None)."""
-    consent_gate(req)
+    reference, voice_params = voice_request_fields(req.reference_path, req.consent_path)
     _check_numbers(req)
     src, dst = check_paths(req.script_path, req.output_path, req.overwrite)
+    not_an_output(dst, req.reference_path, req.consent_path)
     script = parse_script(src, req.lang)
     engine, report = select_engine("narrate", req.engine, req.offline)
-    params: Dict[str, Any] = {"seed": req.seed}
+    params: Dict[str, Any] = dict(voice_params, seed=req.seed)
     if req.accept_unverified_terms:
         params["accept_unverified_terms"] = True
-    probe_reqs = [EngineRequest(op="narrate", text=line.text, lang=req.lang, output_path="", voice=req.voice, params=params)
-                  for line in script.lines]
+    probe_reqs = [EngineRequest(op="narrate", text=line.text, lang=req.lang, output_path="", voice=req.voice,
+                                reference_audio=reference, params=params) for line in script.lines]
     for r in probe_reqs:
-        engine.check_request(r)
+        engine.check_request(r)                   # the consent record and the reference clip's hash, before any work
     timeout = float(req.timeout)
     skill, info = _usable_skill(skill, req.ffmpeg_skill_dir, timeout)
+    if reference:
+        check_reference(skill, reference)
     if script.timed:
         require_cue_placement(info)
     run_dir = _run_dir(os.path.dirname(dst), req.output_path)
@@ -325,7 +361,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         clip_dir = os.path.join(run_dir, "clips")
         os.mkdir(clip_dir)
         reqs = [EngineRequest(op="narrate", text=r.text, lang=r.lang, output_path=os.path.join(clip_dir, f"{k:04d}.wav"),
-                              voice=r.voice, params=dict(params)) for k, r in enumerate(probe_reqs)]
+                              voice=r.voice, reference_audio=r.reference_audio, params=dict(params)) for k, r in enumerate(probe_reqs)]
         results = run_engine_batch(engine.id, reqs, timeout, run_dir)
         clip_facts = []
         for k, (r, res) in enumerate(zip(reqs, results)):
@@ -353,7 +389,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                           "provenance": build_provenance(op="narrate", engine=engine_doc, text=line.text, output_path=r.output_path,
                                                          parameters=parameters, voice=res.extra.get("voice") or req.voice,
                                                          translation=req.translation_note, ffmpeg_skill=info.to_dict(),
-                                                         watermark=res.extra.get("watermark"), credits=clip_credits(engine, res))})
+                                                         watermark=res.extra.get("watermark"), credits=clip_credits(engine, res),
+                                                         consent=res.extra.get("consent"))})
         marks = [c["provenance"]["watermark"] for c in clips]
         watermark = None
         if engine.spec.watermark:
@@ -368,7 +405,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         credits = unique_credits(c["provenance"]["credits"] for c in clips)
         provenance = build_provenance(op="narrate", engine=engine_doc, text=full_text, output_path=timeline, parameters=parameters,
                                       voice=first.extra.get("voice") or req.voice, translation=req.translation_note,
-                                      ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits)
+                                      ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits,
+                                      consent=unique_consents(c["provenance"]["consent"] for c in clips))
         _place(timeline, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
