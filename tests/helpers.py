@@ -353,3 +353,193 @@ def _write16(path: str, samples: List[int], rate: int) -> None:
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+
+
+# The fake VOICEVOX (roadmap step 3, ADR-006): a loopback HTTP server in the test process that answers the endpoints
+# the engine uses, in the shapes read from VOICEVOX/voicevox_engine 0.26.0 (app/routers/engine_info.py, character.py,
+# tts_pipeline.py; model.py AudioQuery; tts_pipeline/model.py AccentPhrase / Mora; metas/metas.py Speaker / SpeakerStyle),
+# and refuses (422, like FastAPI) any request that does not have those shapes:
+#   GET  /version                                     -> "0.26.0"
+#   GET  /speakers                                    -> [Speaker]
+#   POST /audio_query?text=<str>&speaker=<style id>   (no body)  -> AudioQuery: one mora per character, vowel 0.06 s
+#   POST /synthesis?speaker=<style id>  (JSON AudioQuery body)    -> audio/wav, 16-bit mono at outputSamplingRate,
+#        lasting prePhonemeLength + sum(mora lengths) / speedScale + postPhonemeLength (0.2 + 0.06 s per character)
+# Every request is recorded in `.calls` (method, path, query, content type, body). Modes:
+#   ok          as above
+#   notwav      /synthesis answers 200 with JSON
+#   stereo      /synthesis answers a 2-channel WAV
+#   fail_query  /audio_query answers 500
+VV_VERSION = "0.26.0"
+VV_RATE = 24000
+VV_MORA = 0.06
+ZUNDAMON_UUID, METAN_UUID, TSUMUGI_UUID = "388f246b-8c41-4ac1-8e2d-5d79f3ff56d9", "7ffcb7ce-00ec-4bdc-82cd-45a8889e43ff", \
+    "35b2c544-660e-401e-b503-0e14c635303a"
+VV_SPEAKERS: List[Dict[str, Any]] = [
+    {"name": "四国めたん", "speaker_uuid": METAN_UUID, "version": "0.15.1",
+     "styles": [{"name": "ノーマル", "id": 2, "type": "talk"}, {"name": "あまあま", "id": 0, "type": "talk"}],
+     "supported_features": {"permitted_synthesis_morphing": "SELF_ONLY"}},
+    {"name": "ずんだもん", "speaker_uuid": ZUNDAMON_UUID, "version": "0.15.1",
+     "styles": [{"name": "ノーマル", "id": 3, "type": "talk"}, {"name": "あまあま", "id": 1, "type": "streaming_talk"},
+                {"name": "ノーマル", "id": 3003, "type": "sing"}],
+     "supported_features": {"permitted_synthesis_morphing": "SELF_ONLY"}},
+    {"name": "春日部つむぎ", "speaker_uuid": TSUMUGI_UUID, "version": "0.15.1", "styles": [{"name": "ノーマル", "id": 8, "type": "talk"}],
+     "supported_features": {"permitted_synthesis_morphing": "ALL"}},
+]
+
+
+def fake_voicevox_seconds(text: str) -> float:
+    return 0.1 + VV_MORA * len(text) + 0.1
+
+
+class FakeVoicevox:
+    def __init__(self, speakers: Optional[List[Dict[str, Any]]] = None, version: str = VV_VERSION, mode: str = "ok") -> None:
+        self.speakers = VV_SPEAKERS if speakers is None else speakers
+        self.version, self.mode = version, mode
+        self.calls: List[Dict[str, Any]] = []
+        self.url = ""
+
+    def talk_ids(self) -> List[int]:
+        return [st["id"] for sp in self.speakers for st in sp["styles"] if st.get("type", "talk") in ("talk", "streaming_talk")]
+
+    def audio_query(self, text: str, style_id: int) -> Dict[str, Any]:
+        moras = [{"text": ch, "consonant": None, "consonant_length": None, "vowel": "a", "vowel_length": VV_MORA, "pitch": 5.5}
+                 for ch in text]
+        return {"accent_phrases": [{"moras": moras, "accent": 1, "pause_mora": None, "is_interrogative": False}],
+                "speedScale": 1.0, "pitchScale": 0.0, "intonationScale": 1.0, "volumeScale": 1.0, "prePhonemeLength": 0.1,
+                "postPhonemeLength": 0.1, "pauseLength": None, "pauseLengthScale": 1.0, "outputSamplingRate": VV_RATE,
+                "outputStereo": False, "kana": "'" + text}
+
+    @staticmethod
+    def query_errors(q: Any) -> List[str]:
+        """What FastAPI / pydantic would refuse in an AudioQuery body (voicevox_engine 0.26.0 model.py)."""
+        if not isinstance(q, dict):
+            return ["body is not an object"]
+        errs = []
+        numbers = {"speedScale": "gt0", "pitchScale": "", "intonationScale": "", "volumeScale": "ge0", "prePhonemeLength": "ge0",
+                   "postPhonemeLength": "ge0"}
+        for k, rule in numbers.items():
+            v = q.get(k)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                errs.append(f"{k}: missing or not a number")
+            elif (rule == "gt0" and v <= 0) or (rule == "ge0" and v < 0):
+                errs.append(f"{k}: out of range")
+        if isinstance(q.get("outputSamplingRate"), bool) or not isinstance(q.get("outputSamplingRate"), int) or q["outputSamplingRate"] <= 0:
+            errs.append("outputSamplingRate: missing or not a positive integer")
+        if not isinstance(q.get("outputStereo"), bool):
+            errs.append("outputStereo: missing or not a boolean")
+        phrases = q.get("accent_phrases")
+        if not isinstance(phrases, list):
+            errs.append("accent_phrases: missing or not a list")
+            return errs
+        for ph in phrases:
+            if not isinstance(ph, dict) or not isinstance(ph.get("moras"), list) or not isinstance(ph.get("accent"), int) \
+                    or ph["accent"] < 1 or ph["accent"] > len(ph["moras"]):
+                errs.append("accent_phrases: bad AccentPhrase")
+                continue
+            for m in ph["moras"]:
+                if not isinstance(m, dict) or not isinstance(m.get("text"), str) or not isinstance(m.get("vowel"), str) \
+                        or not isinstance(m.get("vowel_length"), (int, float)) or not isinstance(m.get("pitch"), (int, float)):
+                    errs.append("accent_phrases: bad Mora")
+        return errs
+
+    def wav(self, q: Dict[str, Any]) -> bytes:
+        import math
+        import struct
+        import wave
+        rate = int(q["outputSamplingRate"])
+        spoken = sum(float(m["vowel_length"]) + float(m.get("consonant_length") or 0.0) for ph in q["accent_phrases"] for m in ph["moras"])
+        seconds = float(q["prePhonemeLength"]) + spoken / float(q["speedScale"]) + float(q["postPhonemeLength"])
+        n = int(round(seconds * rate))
+        channels = 2 if self.mode == "stereo" or q["outputStereo"] else 1
+        frames = b"".join(struct.pack("<h", int(6000 * math.sin(2 * math.pi * 330.0 * i / rate))) * channels for i in range(n))
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(frames)
+        return buf.getvalue()
+
+
+@contextmanager
+def fake_voicevox(**kw: Any) -> Iterator[FakeVoicevox]:
+    """A FakeVoicevox on 127.0.0.1 (a free port), with DUBBING_VOICEVOX_URL pointing at it. Yields the fake."""
+    from http.server import ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlsplit
+    fake = FakeVoicevox(**kw)
+
+    class Handler(BaseHTTPRequestHandler):
+        def reply(self, status: int, body: Any, ctype: str = "application/json") -> None:
+            data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def handle_any(self, method: str) -> None:
+            parts = urlsplit(self.path)
+            query = {k: v for k, v in parse_qs(parts.query, keep_blank_values=True).items()}
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            fake.calls.append({"method": method, "path": parts.path, "query": {k: v[0] if len(v) == 1 else v for k, v in query.items()},
+                               "content_type": self.headers.get("Content-Type"), "body": body})
+            routes = {("GET", "/version"), ("GET", "/speakers"), ("POST", "/audio_query"), ("POST", "/synthesis")}
+            if (method, parts.path) not in routes:
+                known = {p for _, p in routes}
+                return self.reply(405 if parts.path in known else 404, {"detail": "Method Not Allowed" if parts.path in known else "Not Found"})
+            if parts.path == "/version":
+                return self.reply(200, fake.version)
+            if parts.path == "/speakers":
+                return self.reply(200, fake.speakers)
+            speaker = query.get("speaker", [""])
+            if len(speaker) != 1 or not speaker[0].isdigit():
+                return self.reply(422, {"detail": [{"loc": ["query", "speaker"], "msg": "field required (an integer)"}]})
+            style_id = int(speaker[0])
+            if parts.path == "/audio_query":
+                if fake.mode == "fail_query":
+                    return self.reply(500, {"detail": "Internal Server Error"})
+                text = query.get("text", [])
+                extra = set(query) - {"text", "speaker", "enable_katakana_english", "core_version"}
+                if len(text) != 1 or extra or body:
+                    return self.reply(422, {"detail": [{"loc": ["query", "text"], "msg": "text and speaker are query parameters; no body"}]})
+                if style_id not in fake.talk_ids():
+                    return self.reply(422, {"detail": f"style {style_id} not found"})
+                return self.reply(200, fake.audio_query(text[0], style_id))
+            # /synthesis
+            extra = set(query) - {"speaker", "enable_interrogative_upspeak", "core_version"}
+            if extra or (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
+                return self.reply(422, {"detail": [{"loc": ["body"], "msg": "a JSON AudioQuery body and the speaker query parameter"}]})
+            try:
+                q = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return self.reply(422, {"detail": [{"loc": ["body"], "msg": "invalid JSON"}]})
+            errs = fake.query_errors(q)
+            if errs:
+                return self.reply(422, {"detail": errs})
+            if style_id not in fake.talk_ids():
+                return self.reply(422, {"detail": f"style {style_id} not found"})
+            if fake.mode == "notwav":
+                return self.reply(200, {"not": "a wav"})
+            return self.reply(200, fake.wav(q), "audio/wav")
+
+        def do_GET(self) -> None:  # noqa: N802 - http.server API
+            self.handle_any("GET")
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            self.handle_any("POST")
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    fake.url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with env(DUBBING_VOICEVOX_URL=fake.url):
+            yield fake
+    finally:
+        server.shutdown()
+        server.server_close()

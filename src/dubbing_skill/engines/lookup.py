@@ -5,8 +5,9 @@ machine:
   an environment variable (ADR-001: Chatterbox and Kokoro pin incompatible PyTorch stacks, and Chatterbox's Japanese
   path pulls in a GPL package, so a separate environment per engine is the recommended install).
 - hf_cached_file: a weights file the user already fetched into the Hugging Face cache (or an explicit model dir).
-- loopback_get_json: a GET to an app on 127.0.0.1 / ::1 / localhost only (VOICEVOX, Style-Bert-VITS2 API server).
-  Any other host is refused, so `--offline` holds for every engine.
+- loopback_get_json / loopback_request: HTTP to an app on 127.0.0.1 / ::1 / localhost only (VOICEVOX,
+  Style-Bert-VITS2 API server): the availability GET, and VOICEVOX synthesis (ADR-006). Any other host is refused
+  before a connection is made, so `--offline` holds for every engine. This is the only module that does HTTP.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from ..procs import run_process_group
 from . import pkgprobe
@@ -104,20 +105,39 @@ def check_loopback_url(url: str) -> Tuple[str, int]:
     return parts.hostname, parts.port or 80
 
 
-def loopback_get_json(url: str, path: str, timeout: float = 2.0) -> Tuple[Optional[int], Any, Optional[str]]:
-    """GET <url><path> on loopback. Returns (HTTP status | None, parsed JSON | None, error | None)."""
+def loopback_request(url: str, method: str, path: str, query: Optional[Dict[str, Any]] = None, body: Optional[bytes] = None,
+                     content_type: Optional[str] = None, accept: str = "application/json", timeout: float = 2.0,
+                     max_bytes: int = 1 << 20) -> Tuple[Optional[int], Optional[str], bytes, Optional[str]]:
+    """<method> <url><path>?<query> on loopback. Returns (HTTP status | None, response Content-Type | None, body, error |
+    None). The host is checked before any connection (ValueError for a non-loopback URL); a body longer than
+    `max_bytes` is an error, not a truncated result."""
     host, port = check_loopback_url(url)
+    target = path + ("?" + urlencode(query) if query else "")
+    headers = {"Accept": accept}
+    if body is not None:
+        headers["Content-Type"] = content_type or "application/octet-stream"
     conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
-        conn.request("GET", path, headers={"Accept": "application/json"})
+        conn.request(method, target, body=body if body is not None else (b"" if method == "POST" else None), headers=headers)
         resp = conn.getresponse()
-        body = resp.read(1 << 20)
+        data = resp.read(max_bytes + 1)
+        ctype = resp.getheader("Content-Type")
     except (OSError, http.client.HTTPException) as e:
-        return None, None, f"{type(e).__name__}: {e}"
+        return None, None, b"", f"{type(e).__name__}: {e}"
     finally:
         conn.close()
+    if len(data) > max_bytes:
+        return resp.status, ctype, b"", f"the response is larger than {max_bytes} bytes"
+    return resp.status, ctype, data, None
+
+
+def loopback_get_json(url: str, path: str, timeout: float = 2.0, max_bytes: int = 1 << 20) -> Tuple[Optional[int], Any, Optional[str]]:
+    """GET <url><path> on loopback. Returns (HTTP status | None, parsed JSON | None, error | None)."""
+    status, _, body, err = loopback_request(url, "GET", path, timeout=timeout, max_bytes=max_bytes)
+    if err is not None and status is None:
+        return None, None, err
     try:
         doc = json.loads(body.decode("utf-8")) if body else None
     except (UnicodeDecodeError, ValueError):
         doc = None
-    return resp.status, doc, None
+    return status, doc, err

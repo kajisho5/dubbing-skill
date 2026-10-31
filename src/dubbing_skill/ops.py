@@ -1,5 +1,6 @@
 """The ops. NARRATE (roadmap step 2, ADR-005): a script (timed cues or plain text, already in the target language)
-spoken by a local engine, one clip per line, laid on one timeline WAV through ffmpeg-skill.
+spoken by a local engine (Chatterbox, or VOICEVOX since step 3, ADR-006), one clip per line, laid on one timeline WAV
+through ffmpeg-skill.
 
 NARRATE, step by step:
   1. checks     numbers and policies; a reference voice is refused before anything is read (consent gate, ADR-001:
@@ -7,7 +8,9 @@ NARRATE, step by step:
                 not exist (unless --overwrite) in a directory that exists
   2. script     parsed and checked (cues.py): every line non-empty and within the limits, cues in order and apart
   3. engine     the selected engine serves narrate, reports OK and accepts every line (language, voice), else
-                ENGINE_UNAVAILABLE / MODEL_NOT_FOUND / INVALID_ARGUMENT, before any media work
+                ENGINE_UNAVAILABLE / MODEL_NOT_FOUND / INVALID_ARGUMENT, before any media work. VOICEVOX: the voice
+                (a style id) is looked up on the app, and a character whose terms were not verified is refused
+                (TERMS_UNVERIFIED) unless the caller acknowledges it (ADR-006)
   4. media      ffmpeg-skill is usable; timed cues also need ffmpeg-skill/pad on audio-only input (OPTIONAL_TOOLS),
                 else FFMPEG_SKILL_UNAVAILABLE before the engine runs (ffmpeg-skill 2.23.0 cannot, ADR-005)
   5. engine     the worker runs the engine once on every line (the model is loaded once), in its own process group,
@@ -23,8 +26,9 @@ NARRATE, step by step:
   9. place      renamed into place from a private run directory in the output's own directory, so the output
                 appears whole or not at all; the clips and the run directory are removed
 
-Every clip and the timeline carry a provenance block: engine, version, model, licences, credit, the declared watermark
-and the one read back, the text hash, the translation note, and the ffmpeg-skill version.
+Every clip and the timeline carry a provenance block: engine, version, model, licences, credit, the credits resolved
+for the voice (VOICEVOX: speaker, character, "VOICEVOX:<character>"), the declared watermark and the one read back, the
+text hash, the translation note, and the ffmpeg-skill version. `obligations` lists the credits and the watermark.
 """
 from __future__ import annotations
 
@@ -62,6 +66,7 @@ class NarrateRequest:
     consent_path: Optional[str] = None
     translation_note: Optional[Dict[str, Any]] = None
     seed: int = 0
+    accept_unverified_terms: bool = False     # use a voice whose terms were not verified (VOICEVOX, ADR-006)
     on_overflow: str = "fail"
     timeout: float = DEFAULT_TIMEOUT
     overwrite: bool = False
@@ -89,6 +94,8 @@ def _check_numbers(req: NarrateRequest) -> None:
         raise DubbingError("INVALID_ARGUMENT", f"--on-overflow must be one of {list(OVERFLOW_POLICIES)}", {"on_overflow": req.on_overflow})
     if not isinstance(req.lang, str) or not req.lang.strip():
         raise DubbingError("INVALID_ARGUMENT", "--lang is required (the language the text is already in)", {"lang": req.lang})
+    if not isinstance(req.accept_unverified_terms, bool):
+        raise DubbingError("INVALID_ARGUMENT", "accept_unverified_terms must be true or false", {})
     if req.translation_note is not None and not isinstance(req.translation_note, dict):
         raise DubbingError("INVALID_ARGUMENT", "--translation-note must be a JSON object", {})
 
@@ -270,6 +277,26 @@ def _lay_out(skill: FfmpegSkill, clips: List[str], plan: Dict[str, Any], rate: i
     return timeline, steps
 
 
+def clip_credits(engine: Engine, res: Any) -> List[Dict[str, Any]]:
+    """The credits one clip must carry: the one the engine resolved for its voice (VOICEVOX: "VOICEVOX:<character>" with
+    the speaker and the terms, ADR-006), else the engine's declared credit, else none."""
+    resolved = res.extra.get("credit")
+    if isinstance(resolved, dict) and resolved.get("credit"):
+        return [dict(resolved)]
+    if engine.spec.credit_required and engine.spec.credit:
+        return [{"credit": engine.spec.credit, "character": None, "speaker": res.extra.get("voice"), "terms_verified": None}]
+    return []
+
+
+def unique_credits(per_clip: Any) -> List[Dict[str, Any]]:
+    """Each distinct credit once, in first-use order (one voice per credit string)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for credits in per_clip:
+        for c in credits:
+            out.setdefault(c["credit"], dict(c))
+    return list(out.values())
+
+
 def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     """NARRATE: the script at `req.script_path` spoken in `req.lang` and laid on one mono WAV at `req.output_path`.
     `skill` is the ffmpeg-skill handle (located from `req.ffmpeg_skill_dir` when None)."""
@@ -278,7 +305,9 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
     src, dst = check_paths(req.script_path, req.output_path, req.overwrite)
     script = parse_script(src, req.lang)
     engine, report = select_engine("narrate", req.engine, req.offline)
-    params = {"seed": req.seed}
+    params: Dict[str, Any] = {"seed": req.seed}
+    if req.accept_unverified_terms:
+        params["accept_unverified_terms"] = True
     probe_reqs = [EngineRequest(op="narrate", text=line.text, lang=req.lang, output_path="", voice=req.voice, params=params)
                   for line in script.lines]
     for r in probe_reqs:
@@ -320,7 +349,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                           "provenance": build_provenance(op="narrate", engine=engine_doc, text=line.text, output_path=r.output_path,
                                                          parameters=parameters, voice=res.extra.get("voice") or req.voice,
                                                          translation=req.translation_note, ffmpeg_skill=info.to_dict(),
-                                                         watermark=res.extra.get("watermark"))})
+                                                         watermark=res.extra.get("watermark"), credits=clip_credits(engine, res))})
         marks = [c["provenance"]["watermark"] for c in clips]
         watermark = None
         if engine.spec.watermark:
@@ -332,9 +361,10 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                       "overflow_policy": plan["overflow_policy"], "sample_rate": rate, "channels": TIMELINE_CHANNELS,
                       "engine_parameters": first.extra.get("parameters"), "clips_sha256": [c["provenance"]["output"]["sha256"] for c in clips]}
         full_text = "\n".join(line.text for line in script.lines)
+        credits = unique_credits(c["provenance"]["credits"] for c in clips)
         provenance = build_provenance(op="narrate", engine=engine_doc, text=full_text, output_path=timeline, parameters=parameters,
                                       voice=first.extra.get("voice") or req.voice, translation=req.translation_note,
-                                      ffmpeg_skill=info.to_dict(), watermark=watermark)
+                                      ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits)
         _place(timeline, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -345,7 +375,11 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                         f"{plan['segments'][-1].get('drift', 0.0):.3f}s")
     if plan["overruns"]:
         warnings.append(f"{len(plan['overruns'])} line(s) run longer than their cue: {plan['overruns']} (timing fit: roadmap step 4)")
-    credit = [engine.spec.credit] if engine.spec.credit else []
+    unverified = sorted({c["credit"] for c in credits if c.get("terms_verified") is False})
+    if unverified:
+        warnings.append(f"voice terms not verified, used on the caller's acknowledgement: {unverified}; the credit is derived "
+                        "from the character name, so check each character's own terms for the exact credit and the allowed "
+                        "uses (ADR-006)")
     return {
         "schema": NARRATE_SCHEMA,
         "ok": True,
@@ -361,7 +395,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                                                    "credit_required", "watermark")},
         "timeline": plan,
         "clips": clips,
-        "obligations": {"credit": credit, "credit_required": engine.spec.credit_required, "watermark": watermark},
+        "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
+                        "credits": credits, "watermark": watermark},
         "steps": steps,
         "provenance": provenance,
         "warnings": warnings,

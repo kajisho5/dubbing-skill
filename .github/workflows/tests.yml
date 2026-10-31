@@ -36,7 +36,8 @@ jobs:
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract, probe and join) and
     # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001): NARRATE
-    # runs on the fake Chatterbox. Nothing may skip here except the real-Chatterbox tests, which run in `engines`.
+    # runs on the fake Chatterbox and the fake VOICEVOX. Nothing may skip here except the real-engine tests, which run in
+    # `engines` (Chatterbox) and `voicevox`.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -53,14 +54,14 @@ jobs:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: python -m pip install -e .
-      - name: All tests run; only the real-Chatterbox tests (engines job) may skip
+      - name: All tests run; only the real-engine tests (engines and voicevox jobs) may skip
         env:
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real Chatterbox"
+          ! grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (Chatterbox|VOICEVOX)"
       - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0)
         run: |
           dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
@@ -71,8 +72,8 @@ jobs:
     # recommends (ADR-001: it pins torch and pulls in pykakasi, GPL-3.0-or-later, which never enters this package's
     # environment), on CPU PyTorch 2.6.0 from the PyTorch CPU index. The six checkpoint files 0.1.7 loads are fetched
     # once at a pinned Hugging Face revision and checked against the SHA-256 the repository publishes for them (LFS);
-    # the skill itself never downloads. The real-engine tests that skip everywhere else must run and pass here, and
-    # nothing else may skip.
+    # the skill itself never downloads. The real-Chatterbox tests that skip everywhere else must run and pass here, and
+    # nothing else may skip except the real-VOICEVOX tests (voicevox job).
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
@@ -141,10 +142,69 @@ jobs:
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log
+          ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real VOICEVOX"
           for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done
           { echo "### Real Chatterbox $CHATTERBOX_VERSION on CPU (NARRATE, text mode)"; echo;
             echo "| lang | lines | timeline s | expected s | wall s | clips s | Perth found |"; echo "|---|---|---|---|---|---|---|";
             cat "$DUBBING_MEASURE_LOG"; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  voicevox:
+    # Linux only, the real VOICEVOX engine (ADR-006): the official CPU image voicevox/voicevox_engine, pinned by tag and
+    # digest, published on 127.0.0.1:50021 only. Running it is use under the VOICEVOX engine terms (commercial and
+    # non-commercial use allowed; ENGINE LGPL-3.0, CORE MIT); nothing is redistributed, and the audio made here is
+    # discarded. The real-VOICEVOX tests that skip everywhere else must run and pass here, and nothing else may skip
+    # except the real-Chatterbox tests (engines job).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VOICEVOX_IMAGE: voicevox/voicevox_engine:cpu-amd64-ubuntu24.04-0.26.0@sha256:cb8ad001c69fc7b8864b07a1d309a3a180df953654c655d328065b5e0cadc658
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/ffmpeg-skill
+          path: vendor/ffmpeg-skill
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/AI-video-production-OS
+          path: vendor/AI-video-production-OS
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Start the VOICEVOX engine on loopback (official CPU image)
+        run: |
+          set -eu
+          docker pull "$VOICEVOX_IMAGE"
+          docker run -d --name voicevox -p 127.0.0.1:50021:50021 "$VOICEVOX_IMAGE"
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:50021/version; then echo; break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:50021/version
+      - run: python -m pip install -e .
+      - name: doctor reports VOICEVOX OK
+        run: |
+          dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); v=d['checks']['engines']['voicevox']; assert v['status']=='OK' and v['version']=='0.26.0', v"
+      - name: All tests run, the real-VOICEVOX ones included
+        env:
+          DUBBING_REAL_VOICEVOX: "1"
+          DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
+          AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
+        run: |
+          set -o pipefail
+          export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
+          python -m unittest discover -s tests -v 2>&1 | tee test.log
+          ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real Chatterbox"
+          for t in test_real_voicevox_narrates_japanese test_real_voicevox_speakers_and_terms; do
+            grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
+          done
+          { echo "### Real VOICEVOX 0.26.0 on CPU (NARRATE, text mode, default voice)"; echo;
+            echo "| lang | lines | timeline s | expected s | wall s | clips s | credit |"; echo "|---|---|---|---|---|---|---|";
+            cat "$DUBBING_MEASURE_LOG"; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Engine log
+        if: always()
+        run: docker logs voicevox 2>&1 | tail -n 60 || true

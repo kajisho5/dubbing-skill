@@ -9,7 +9,8 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   dubbing engines --json      registered engines with status and licences [--offline]
   dubbing narrate <script> --lang ja -o <out.wav> --json
                               cues (.json / .srt / .vtt) or text (.txt) spoken by a local engine, one clip per line,
-                              laid on one timeline WAV through ffmpeg-skill (ADR-005)
+                              laid on one timeline WAV through ffmpeg-skill (ADR-005); --engine voicevox uses the
+                              VOICEVOX app on loopback, with the credit of each voice in the receipt (ADR-006)
 
 dub and describe are declared PROPOSED and arrive in roadmap steps 5 and 7.
 Translation is not an op: the caller passes text that is already translated (ADR-003)."""
@@ -47,8 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("script", help="cues (.json, .srt, .vtt) or plain text (.txt, one utterance per line)")
     n.add_argument("-o", "--output", required=True, help="the timeline .wav (mono, at the engine's rate)")
     n.add_argument("--lang", required=True, help="the language the text is already in (ja, en, ...); nothing is translated")
-    n.add_argument("--engine", help="engine id (default: chatterbox)")
-    n.add_argument("--voice", help="engine voice (chatterbox: its built-in voice only)")
+    n.add_argument("--engine", help="engine id (default: chatterbox; voicevox: the VOICEVOX app on loopback)")
+    n.add_argument("--voice", help="engine voice (chatterbox: its built-in voice only; voicevox: a style id, default 3, "
+                                   "the zundamon normal style)")
+    n.add_argument("--accept-unverified-voice-terms", action="store_true",
+                   help="use a VOICEVOX character whose terms this skill has not verified (you checked them); the credit is "
+                        "recorded as unverified (ADR-006)")
     n.add_argument("--reference", help="reference voice for cloning: refused until the consent gate (roadmap step 6)")
     n.add_argument("--consent", help="consent record for --reference (roadmap step 6)")
     n.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
@@ -149,6 +154,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _emit(narrate(NarrateRequest(script_path=args.script, output_path=args.output, lang=args.lang, engine=args.engine,
                                          voice=args.voice, reference_path=args.reference, consent_path=args.consent,
                                          translation_note=_note(args.translation_note), seed=args.seed,
+                                         accept_unverified_terms=args.accept_unverified_voice_terms,
                                          on_overflow=args.on_overflow, timeout=args.timeout, overwrite=args.overwrite,
                                          ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
             return 0

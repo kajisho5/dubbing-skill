@@ -4,7 +4,10 @@ Chatterbox in the worker, the clips laid out by the real ffmpeg-skill/join). Ski
 (DUBBING_FFMPEG_SKILL_DIR or ../ffmpeg-skill); CI's integration job always has one.
 
 RealChatterboxTests run the real Chatterbox (its own venv in DUBBING_CHATTERBOX_PYTHON, weights in the Hugging Face
-cache) and only in CI's engines job, which sets DUBBING_REAL_CHATTERBOX=1; everywhere else they skip (ADR-005)."""
+cache) and only in CI's engines job, which sets DUBBING_REAL_CHATTERBOX=1; everywhere else they skip (ADR-005).
+RealVoicevoxTests run against a real VOICEVOX engine on loopback (DUBBING_VOICEVOX_URL, default 127.0.0.1:50021) and
+only in CI's voicevox job, which starts the official CPU image and sets DUBBING_REAL_VOICEVOX=1; everywhere else they
+skip, as they do whenever the app is absent (ADR-006)."""
 from __future__ import annotations
 
 import json
@@ -19,7 +22,8 @@ from helpers import (FAKE_RATE, FFMPEG_SKILL_DIR, chatterbox_ready, env, fake_ch
                      run_cli, write_tone_wav)
 
 from dubbing_skill.doctor import doctor
-from dubbing_skill.engines import get_engine
+from dubbing_skill.engines import get_engine, voicevox
+from dubbing_skill.engines.base import EngineRequest
 from dubbing_skill.errors import DubbingError
 from dubbing_skill.ffmpeg_skill import TOOLS_USED, FfmpegSkill
 from dubbing_skill.ops import NarrateRequest, narrate
@@ -175,6 +179,64 @@ class RealChatterboxTests(unittest.TestCase):
 
     def test_real_chatterbox_narrates_english(self):
         self.speak("en", ["Welcome to the conference.", "The next talk starts in five minutes."])
+
+
+REAL_VOICEVOX = os.environ.get("DUBBING_REAL_VOICEVOX") == "1"
+
+
+@unittest.skipUnless(REAL_VOICEVOX and FFMPEG_SKILL_DIR and HAVE_FFMPEG,
+                     "needs the real VOICEVOX engine (voicevox job: DUBBING_REAL_VOICEVOX=1)")
+class RealVoicevoxTests(unittest.TestCase):
+    """The real VOICEVOX engine over loopback: Japanese narration with the default voice (ずんだもん ノーマル, style 3),
+    duration within tolerance, the credit per character in the receipt, and the terms gate against the app's own
+    /speakers. Timings go to $DUBBING_MEASURE_LOG when it is set."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+        report = get_engine("voicevox").report()
+        self.assertEqual(report["status"], "OK", report)
+
+    def test_real_voicevox_narrates_japanese(self):
+        lines = ["本日はご来場いただき、ありがとうございます。", "それでは、講演を始めます。"]
+        script = _write(os.path.join(self.tmp.name, "ja.txt"), "\n".join(lines) + "\n")
+        out = os.path.join(self.tmp.name, "ja.wav")
+        t0 = time.time()
+        doc = narrate(NarrateRequest(script_path=script, output_path=out, lang="ja", engine="voicevox", timeout=1200), skill=self.skill)
+        facts = self.skill.probe(out)
+        self.assertLessEqual(abs(float(facts["duration"]) - doc["output"]["expected_duration"]), doc["output"]["tolerance"])
+        self.assertEqual(facts["audio"]["channels"], 1)
+        self.assertEqual(int(facts["audio"]["sample_rate"]), doc["clips"][0]["sample_rate"])
+        self.assertEqual(doc["obligations"]["credit"], ["VOICEVOX:ずんだもん"])
+        credit = doc["obligations"]["credits"][0]
+        self.assertEqual((credit["character"], credit["speaker"], credit["speaker_uuid"], credit["terms_verified"]),
+                         ("ずんだもん", 3, "388f246b-8c41-4ac1-8e2d-5d79f3ff56d9", True))
+        self.assertEqual(doc["provenance"]["engine"]["id"], "voicevox")
+        self.assertTrue(doc["provenance"]["engine"]["version"].startswith("0."), doc["provenance"]["engine"])
+        for clip, text in zip(doc["clips"], lines):
+            self.assertEqual(clip["provenance"]["credits"][0]["credit"], "VOICEVOX:ずんだもん")
+            self.assertGreater(clip["duration"], 0.03 * len(text), (text, clip["duration"]))     # speech, not a stub
+            self.assertLess(clip["duration"], 1.0 * len(text) + 2.0, (text, clip["duration"]))
+        log = os.environ.get("DUBBING_MEASURE_LOG")
+        if log:
+            with open(log, "a", encoding="utf-8") as fh:
+                fh.write(f"| ja | {len(lines)} | {doc['output']['duration']:.2f} | {doc['output']['expected_duration']:.2f} | "
+                         f"{time.time() - t0:.1f} | {', '.join('%.2f' % c['duration'] for c in doc['clips'])} | "
+                         f"{doc['obligations']['credit'][0]} |\n")
+
+    def test_real_voicevox_speakers_and_terms(self):
+        # the verified table (style ids, uuids, names) matches the real app, and a character outside it is refused
+        eng = get_engine("voicevox")
+        for style_id, name in ((3, "ずんだもん"), (2, "四国めたん")):
+            voice = eng.resolve(style_id)
+            self.assertEqual((voice["character"], voice["terms_verified"], voice["credit"]), (name, True, f"VOICEVOX:{name}"))
+        others = [st["id"] for sp in eng.speakers() if voicevox.terms_for(sp["name"], sp["speaker_uuid"]) is None
+                  for st in sp["styles"] if st.get("type", "talk") in voicevox.TALK_STYLE_TYPES]
+        self.assertTrue(others, "the engine lists no character outside the verified table")
+        with self.assertRaises(DubbingError) as e:
+            eng.check_request(EngineRequest("narrate", "こんにちは", "ja", "o.wav", voice=str(others[0])))
+        self.assertEqual(e.exception.code, "TERMS_UNVERIFIED")
 
 
 if __name__ == "__main__":

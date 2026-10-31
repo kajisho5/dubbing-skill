@@ -13,7 +13,7 @@ Skeleton 0.1.0 ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contra
 
 | Owned job | Status | Note |
 |---|---|---|
-| AIナレーション(TTS) | experimental | NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)): text works; timed cues wait for ffmpeg-skill/pad on audio |
+| AIナレーション(TTS) | experimental | NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)): text works with Chatterbox or VOICEVOX ([#5](https://github.com/kajisho5/dubbing-skill/pull/5)); timed cues wait for ffmpeg-skill/pad on audio |
 | 吹替・声の置換 | missing | needs translated cues; nobody translates today |
 | 音声解説 | missing |  |
 
@@ -27,7 +27,7 @@ None. Expected: ffmpeg-skill probe, join, audio --replace / --music --duck, loud
   - Done when: doctor lists all 4 engines with install status
 - [x] **2. NARRATE op (Chatterbox)** ([#4](https://github.com/kajisho5/dubbing-skill/pull/4), [docs/decisions.md](docs/decisions.md) ADR-005; plain text works end to end; timed cues wait for ffmpeg-skill/pad on audio-only input and are refused cleanly until then) — text or cues -> clips -> timeline WAV
   - Done when: duration within tolerance; receipt records engine + watermark
-- [ ] **3. VOICEVOX engine** — local app over HTTP; credit in provenance
+- [x] **3. VOICEVOX engine** ([#5](https://github.com/kajisho5/dubbing-skill/pull/5), [docs/decisions.md](docs/decisions.md) ADR-006; the app's own `/audio_query` + `/synthesis` on loopback, credit `VOICEVOX:<character>` per clip in provenance and obligations, unverified characters refused unless acknowledged; real engine in the `voicevox` CI job) — local app over HTTP; credit in provenance
   - Done when: skips when the app is absent
 - [ ] **4. Timing fit** — fit each line into its cue window (tempo limit, pad, overflow report)
   - Done when: unit tests on overflow/underflow
