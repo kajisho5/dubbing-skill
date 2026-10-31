@@ -44,7 +44,7 @@ class EngineSpec:
     watermark: Optional[str]                  # watermark the engine embeds in every clip; None = none
     languages: Tuple[str, ...]
     japanese: str                             # "native" | "weak" (ADR-001)
-    voice_cloning: bool                       # can take a reference voice (needs a consent record, roadmap step 6)
+    voice_cloning: bool                       # can speak in a real person's voice (needs a consent record, ADR-009)
     isolation: str                            # how the engine is kept apart from this MIT package
     version_range: str
     install: str
@@ -56,6 +56,8 @@ class EngineSpec:
     execution_mode: str = "local"
     network_required: bool = False            # at run time; no engine registered here needs it
     deterministic: bool = False               # neural TTS samples; a fixed seed is recorded, not a bit-exact promise
+    reference_kind: str = "audio"             # what a reference voice is: "audio" (a clip, probed through ffmpeg-skill) or
+                                              # "model" (a voice model trained on the person, Style-Bert-VITS2, ADR-011)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)

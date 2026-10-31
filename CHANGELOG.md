@@ -2,6 +2,21 @@
 
 ## 0.1.0 - unreleased
 
+Style-Bert-VITS2 and Kokoro synthesis (roadmap step 8, ADR-011).
+
+- Style-Bert-VITS2 (AGPL-3.0) speaks through your own API server on loopback: `POST /voice`, query parameters only, as read from `server_fastapi.py`. It is never imported, bundled or installed.
+  - `--voice MODEL[:SPEAKER[:STYLE]]`.
+  - The published JVNV models carry their CC BY-SA 4.0 credit and the ShareAlike condition per clip.
+  - Any other model is treated as cloning. It needs `--reference <model .safetensors>` and the voice owner's consent record (`CONSENT_REQUIRED` otherwise; no flag).
+  - Usable in NARRATE, DUB and AUDIO_DESCRIPTION.
+- Kokoro-82M runs in the worker from local files only: `KModel(config=, model=)`, and voices as local `.pt` paths. The lookup now needs `config.json` next to `kokoro-v1_0.pth`.
+  - Each line is one call at 24 kHz. Voices like `jf_alpha` must match the language.
+  - The four CC BY 3.0-trained Japanese voices carry their credit per clip. No cloning.
+  - Usable in NARRATE and AUDIO_DESCRIPTION.
+- `EngineSpec.reference_kind` (`audio` or `model`).
+- Absent engines fail with `ENGINE_UNAVAILABLE` or `MODEL_NOT_FOUND` and their install line. Nothing is downloaded.
+- Tests: 17 new (`tests/test_sbv2_kokoro.py`: a fake Kokoro package, a fake Style-Bert-VITS2 server, licence isolation). There is no real-engine CI job for these two engines: no weights are downloaded here.
+
 AUDIO_DESCRIPTION (roadmap step 7, ADR-010).
 
 - `dubbing describe <programme> <descriptions> --lang L -o <out> (--gaps gaps.json | --detect-gaps)` (tool `dubbing/audio-description`, schema `dubbing/describe@1`). `speech.audio_description` is `EXPERIMENTAL`.

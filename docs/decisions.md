@@ -474,3 +474,68 @@ Roadmap step 7: narration only inside caller-given gaps, ducked. It is done when
 
 - Extended audio description, which pauses the picture when a gap is too short. It needs video re-timing, which is not provided (`not_provided`: lip sync / video re-timing).
 - Fades at the description's edges (ADR-008 follow-up).
+
+## ADR-011 Style-Bert-VITS2 and Kokoro synthesis: the AGPL engine as its own server, Kokoro in the worker from local files
+
+### Context
+
+Roadmap step 8: the AGPL engine runs in a separate process, and it is done when the licence isolation is documented. ADR-001 registered both engines and checked their licences. ADR-002 found them by a lookup only, and `process` raised `NOT_IMPLEMENTED`. Both stay optional: they are never installed, imported or downloaded by this skill. When absent, a call fails with `ENGINE_UNAVAILABLE` or `MODEL_NOT_FOUND`, and the error carries the engine's install line.
+
+### Sources read (2026-10-31)
+
+- **Style-Bert-VITS2**, litagin02/Style-Bert-VITS2, branch `master`.
+  - `README.md`: the LICENSE section (AGPL-3.0; `text/user_dict` LGPL-3.0), the release history (latest Ver 2.7.0, 2025-08-24), and the API server (`python server_fastapi.py`, specification at `/docs`).
+  - `LICENSE`: GNU AGPL v3.
+  - `server_fastapi.py`: `GET|POST /voice` with every parameter a query parameter (`text`, `model_name`, `model_id`, `speaker_name`, `speaker_id`, `sdp_ratio`, `noise`, `noisew`, `length`, `language`, `auto_split`, `split_interval`, `assist_text`, `assist_text_weight`, `style`, `style_weight`, `reference_audio_path`). It answers `audio/wav` written by `scipy.io.wavfile`. `GET /models/info` answers `{id: {config_path, model_path, device, spk2id, id2spk, style2id}}`.
+  - `style_bert_vits2/constants.py`: `Languages` is JP, EN, ZH. The defaults are style Neutral, style weight 1.0, sdp ratio 0.2, noise 0.6, noisew 0.8, length 1.0, and line split on.
+  - [HF litagin/style_bert_vits2_jvnv](https://huggingface.co/litagin/style_bert_vits2_jvnv): licence `cc-by-sa-4.0`, models `jvnv-F1-jp`, `jvnv-F2-jp`, `jvnv-M1-jp`, `jvnv-M2-jp`, plus the non-JP-Extra `jvnv-F1`, `jvnv-F2`, `jvnv-M1`, `jvnv-M2`.
+- **Kokoro**, hexgrad/kokoro, branch `main`, and [PyPI kokoro 0.9.4](https://pypi.org/project/kokoro/) (Apache License, Python >=3.10, <3.13).
+  - `README.md`: `KPipeline(lang_code=...)`, 24 kHz output, and the languages: `a` American English, `b` British English, `e` es, `f` fr-fr, `h` hi, `i` it, `p` pt-br, `j` Japanese (`misaki[ja]`), `z` Mandarin (`misaki[zh]`).
+  - `kokoro/pipeline.py`: `LANG_CODES` and `ALIASES`; `KPipeline(lang_code, repo_id, model)`; `__call__(text, voice, speed, split_pattern)` yields results with `.audio`. `load_single_voice` loads a path ending in `.pt` as it is, and anything else is fetched from the Hub.
+  - `kokoro/model.py`: `KModel(repo_id, config, model)`. It fetches `config.json` and the weights from the Hub only when they are not given.
+  - [HF hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) and its `VOICES.md`: the Japanese voices `jf_alpha` (C+), and `jf_gongitsune`, `jf_nezumi`, `jf_tebukuro` and `jm_kumo`, which list koniwa `tnc` sources.
+  - [koniwa/koniwa](https://github.com/koniwa/koniwa) README: the `tnc` source (テレビ西日本 readings) is audio CC BY 3.0, transcripts public domain.
+
+### Decision: Style-Bert-VITS2
+
+- **Isolation (the licence boundary).** The code is AGPL-3.0, so it is never imported, bundled, vendored or installed by this package. A unit test bans `import style_bert_vits2` / `from style_bert_vits2` in the source.
+  - The user runs the project's own API server in its own environment. This skill sends it HTTP requests on loopback only. The URL check refuses any other host before a connection is made (ADR-006).
+  - No AGPL code is linked into, or distributed with, this MIT package. Each generated clip records the model and its licence. CC BY-SA 4.0 is a licence of the model weights, and whether it attaches to the audio is unverified (ADR-001), so every JVNV clip records the ShareAlike condition.
+- **Synthesis.** `POST /voice` with query parameters only and no body: `text`, `model_name`, `speaker_name`, `style`, `language` (ja → JP, en → EN, zh → ZH), `auto_split=false` (one clip per line), and the constants' defaults for `sdp_ratio`, `noise`, `noisew`, `length` and `style_weight`, which are recorded. The answer must be a RIFF/WAVE file, mono, with frames, else `INVALID_RESULT`. It is written as `.part` and renamed into place. The server takes no seed (`seed: null`). `reference_audio_path`, which takes a style from an audio file on the server, is not used.
+- **Voices are models.** `--voice MODEL[:SPEAKER[:STYLE]]`. The model's name is its directory under `model_assets/`, the parent of `model_path`, read with either path separator. Without a voice, model 0 is used with its first speaker and Neutral. An unknown model, speaker or style is `INVALID_ARGUMENT` before any synthesis.
+- **Cloning (ADR-009).** Only the eight published JVNV models are used as they are, with the credit `Style-Bert-VITS2 model: <name>, JVNV corpus, CC BY-SA 4.0`. Any other model may be trained on a real person's voice, so it is treated as cloning:
+  - It needs `--reference <the model's .safetensors file>` and that person's consent record, whose `reference.sha256` is the model file's SHA-256.
+  - The record is verified in the op and again in the worker (`Engine.check_consent`). The consented file's name must equal the file the server loaded for that model (`model_path`), else `CONSENT_REQUIRED` with `reason: reference_mismatch`.
+  - Without a reference, it is `CONSENT_REQUIRED` with `reason: unverified_model`. The VOICEVOX acknowledgement flag does not apply, and there is no other flag.
+  - `EngineSpec.reference_kind` is `"model"`, so the reference is hashed but not probed as audio.
+  - The clip's credit names the model and the voice owner, and its provenance carries the consent record.
+- **Ops.** NARRATE, DUB (a voice per speaker) and AUDIO_DESCRIPTION.
+
+### Decision: Kokoro
+
+- **Isolation.** Kokoro runs in the worker only, under `DUBBING_KOKORO_PYTHON` when set. It is loaded with `importlib` inside `process_batch` after the worker check, and never in the calling process (a test checks `sys.modules`).
+- **Local files only.** The lookup now needs `config.json` *and* `kokoro-v1_0.pth` in one snapshot (or `DUBBING_KOKORO_MODEL_DIR`).
+  - Each voice's `voices/<voice>.pt` is checked before any work (`MODEL_NOT_FOUND` with the `hf download` line).
+  - The model is built with `KModel(repo_id, config=<local config.json>, model=<local .pth>)`, and the voice is passed as its local `.pt` path.
+  - So neither `hf_hub_download` call in kokoro runs, and the Hugging Face libraries are offline in the worker anyway.
+  - The install line fetches `config.json`, the weights and `voices/jf_alpha.pt`.
+- **Synthesis.** One `KPipeline` per language (ja → `j`, en-us → `a`, en-gb → `b`, es → `e`, fr → `f`, hi → `h`, it → `i`, pt-br → `p`, zh → `z`), with the model loaded once per batch. Each line is one call with `split_pattern=None`. The audio chunks it yields are joined and written as 16-bit mono at 24 kHz. `speed` defaults to 1.0. The seed is set and recorded.
+- **Voices.** A voice is Kokoro's own id, and must start with the language's letter (`jf_alpha` for Japanese; the default per language is listed in `DEFAULT_VOICES`). There is no cloning: a reference is `INVALID_ARGUMENT`.
+- **Credit.** `jf_gongitsune`, `jf_nezumi`, `jf_tebukuro` and `jm_kumo` were trained on koniwa `tnc` readings (CC BY 3.0, テレビ西日本). A clip in one of them carries that credit in its provenance and in `obligations`. `jf_alpha` carries none.
+- **Ops.** NARRATE and AUDIO_DESCRIPTION. Kokoro does not dub (ADR-001: fixed voices, no voice per speaker).
+
+### Tests
+
+- `tests/test_sbv2_kokoro.py`, 17 tests, no engines.
+  - **Kokoro**: a fake `kokoro` package in the 0.9.4 shapes. Its `KModel` and `KPipeline` refuse anything but local files. It runs through the real worker for NARRATE and AUDIO_DESCRIPTION.
+    - Covered: the model loaded once from `config.json` and `kokoro-v1_0.pth`; `lang_code`; the local voice path; clip lengths; the CC BY credit; voice and reference refusals before the engine; a missing `config.json`; an absent engine with its install line; and the engine refusing to run outside the worker.
+  - **Style-Bert-VITS2**: a fake API server on loopback that refuses any request shape `server_fastapi.py` would not take (422).
+    - Covered: the `/voice` query; JVNV credits with the ShareAlike condition; style selection in DUB.
+    - The consent gate for a non-JVNV model: no reference, the wrong file, a revoked record, then a valid record. Nothing is synthesised before it passes.
+    - Also: a JVNV model refusing a reference; unknown voices; bad answers; an absent server and a non-loopback URL; and the worker batch.
+  - **Licence isolation**: the specs declare it, no import of either engine is in the source, and this ADR carries the source URLs.
+- `tests/test_unit.py`: Kokoro now needs `config.json` next to the weights. The worker test that reached `NOT_IMPLEMENTED` now checks that a structured `CONSENT_REQUIRED` crosses the worker boundary, since no engine is declared-only any more.
+
+### Not covered
+
+- No real-engine CI job. The Style-Bert-VITS2 server needs PyTorch, the BERT models and a voice model (several GB), and Kokoro needs PyTorch and the 82M checkpoint. Neither is downloaded here. Both clients are tested against the request and answer shapes read from the sources above.

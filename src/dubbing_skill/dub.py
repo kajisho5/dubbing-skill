@@ -216,7 +216,8 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     timeout = float(req.timeout)
     skill, info = _usable_skill(skill, req.ffmpeg_skill_dir, timeout)
     for reference in sorted({r.reference_audio for r in probe_reqs if r.reference_audio}):
-        check_reference(skill, reference)
+        if engine.spec.reference_kind == "audio":                        # a model file (Style-Bert-VITS2) is not probed
+            check_reference(skill, reference)
     in_facts = probe_programme(skill, src, kind, req.audio_stream, script)
     programme_end = float(in_facts["duration"])
 

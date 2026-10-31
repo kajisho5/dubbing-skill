@@ -352,7 +352,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         engine.check_request(r)                   # the consent record and the reference clip's hash, before any work
     timeout = float(req.timeout)
     skill, info = _usable_skill(skill, req.ffmpeg_skill_dir, timeout)
-    if reference:
+    if reference and engine.spec.reference_kind == "audio":          # a model file (Style-Bert-VITS2) is not probed
         check_reference(skill, reference)
     if script.timed:
         require_cue_placement(info)
