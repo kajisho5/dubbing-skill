@@ -8,7 +8,9 @@ from . import PACKAGE_NAME, SKILL_ID, __version__
 from .doctor import DOCTOR_SCHEMA, IMPLEMENTED_OPS, OP_STEP, TRANSLATION
 from .engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
 from .errors import ERROR_TABLE
-from .ffmpeg_skill import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
+from .cues import MAX_LINE_CHARS, MAX_LINES
+from .ffmpeg_skill import FLAGS_USED, OPTIONAL_TOOLS, OPTIONAL_USE, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
+from .ops import NARRATE_SCHEMA
 from .provenance import ENGINE_FIELDS
 
 CONTRACT_VERSION = "1.0"
@@ -23,11 +25,20 @@ CUES_INPUT = {
                    "(engine, reviewer) so it is recorded in the provenance. No engine is chosen here",
 }
 _OP_TOOLS = {
-    "narrate": {"description": "Narration from text or cues: one clip per line, assembled into a timeline WAV",
-                "inputs": ["cues (CUES_INPUT) or plain text", "voice id, or a reference voice with a consent record (step 6)"],
-                "argv": ["narrate", "<cues.json|cues.srt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox]",
-                         "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--translation-note <json>]",
-                         "[--timeout 3600]", "[--overwrite]", "--json"]},
+    "narrate": {"description": "Narration from text or cues: one clip per line by a local engine (worker subprocess), laid on "
+                               "one mono timeline WAV through ffmpeg-skill (pad + join), validated through ffmpeg-skill/probe",
+                "inputs": ["cues (CUES_INPUT: .json, .srt, .vtt) or plain text (.txt, one utterance per line, back to back)",
+                           "the engine's built-in voice; a reference voice is refused until the consent gate (step 6)"],
+                "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox]",
+                         "[--voice <id>]", "[--translation-note <json>]", "[--seed 0]", "[--on-overflow fail|shift]",
+                         "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
+                "refused": {"--reference / --consent": "NOT_IMPLEMENTED until roadmap step 6 (consent gate, ADR-001)",
+                            "timed cues": "FFMPEG_SKILL_UNAVAILABLE while ffmpeg-skill/pad cannot take audio-only input (ADR-005)"},
+                "schema": NARRATE_SCHEMA,
+                "limits": {"lines": MAX_LINES, "chars_per_line": MAX_LINE_CHARS, "duration_tolerance": "max(0.1 s, 1 %)"},
+                "output": "mono PCM WAV at the first clip's sample rate (Chatterbox: 24 kHz); one clip per line, each placed at "
+                          "its cue start (cues) or back to back (text); the timeline lasts to the later of the last clip and the "
+                          "last cue end"},
     "dub": {"description": "Dialogue replaced with translated speech fitted to each cue window, muxed through ffmpeg-skill",
             "inputs": ["source video", "translated cues (CUES_INPUT)", "voice per speaker"],
             "argv": ["dub", "<video>", "<cues.json|cues.srt>", "--lang <en>", "-o <out.mp4>", "[--engine chatterbox]",
@@ -64,6 +75,7 @@ def contract() -> Dict[str, Any]:
         {"id": "ffmpeg-skill", "kind": "skill", "required": True, "for": [CAPABILITY_IDS[o] for o in CAPABILITY_IDS],
          "version_range": "any release whose contract declares the tools and flags below (capability detection)",
          "tools": list(TOOLS_USED), "flags": {t: list(f) for t, f in FLAGS_USED.items()},
+         "optional_tools": {t: {"flags": list(f), "audio_only": True, "for": OPTIONAL_USE[t]} for t, f in OPTIONAL_TOOLS.items()},
          "contract_version": SUPPORTED_CONTRACT_VERSION,
          "located_by": ["--ffmpeg-skill", "$DUBBING_FFMPEG_SKILL_DIR", "$VIDEO_AGENT_FFMPEG_SKILL_DIR",
                         "~/.claude/skills/ffmpeg-skill", "./vendor/ffmpeg-skill", "../ffmpeg-skill"]},
@@ -100,12 +112,15 @@ def contract() -> Dict[str, Any]:
                     "optional": True,
                     "statuses": ["OK", "MISSING", "INCOMPATIBLE"]},
         "policy": {"voice_cloning": "a reference voice (or a model trained on a real person's voice) requires a recorded "
-                                    "consent of that person (OS ADR-012); enforced from roadmap step 6, and no op runs before then",
+                                    "consent of that person (OS ADR-012); until roadmap step 6 verifies such a record, every op "
+                                    "refuses a reference voice (NOT_IMPLEMENTED) before reading it, and so does every engine",
                    "credit": "an engine's credit (credit_required) is carried into the provenance and must appear in the "
                              "published video's description or credits",
-                   "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance"},
+                   "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance, and "
+                                "Chatterbox's Perth mark is read back from every clip (a clip where it is not found is refused)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "voice", "text.sha256", "translation",
-                                  "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
+                                  "watermark", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
+                       "per_clip": True,
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["dubbing", "<command>", "...", "--json"], "network": False, "shell": False,
                       "loopback_http": [eid for eid in engine_ids() if get_engine(eid).spec.kind == "local_http"],

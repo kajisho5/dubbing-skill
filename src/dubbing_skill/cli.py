@@ -7,8 +7,11 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   dubbing contract --json     the contract (alias: skill --json)
   dubbing doctor --json       engines, ffmpeg-skill, ops readiness [--offline] [--ffmpeg-skill DIR]
   dubbing engines --json      registered engines with status and licences [--offline]
+  dubbing narrate <script> --lang ja -o <out.wav> --json
+                              cues (.json / .srt / .vtt) or text (.txt) spoken by a local engine, one clip per line,
+                              laid on one timeline WAV through ffmpeg-skill (ADR-005)
 
-The ops (narrate, dub, describe) are declared PROPOSED and arrive in roadmap steps 2, 5 and 7.
+dub and describe are declared PROPOSED and arrive in roadmap steps 5 and 7.
 Translation is not an op: the caller passes text that is already translated (ADR-003)."""
 from __future__ import annotations
 
@@ -21,6 +24,8 @@ from . import PACKAGE_NAME, SKILL_ID, __version__
 from .contract import contract
 from .doctor import doctor, engines_report
 from .errors import DubbingError
+from .ops import OVERFLOW_POLICIES, NarrateRequest, narrate
+from .service import DEFAULT_TIMEOUT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,7 +43,36 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("engines", help="registered engines: status, version, licences, credit, watermark")
     e.add_argument("--offline", action="store_true")
     e.add_argument("--json", action="store_true")
+    n = sub.add_parser("narrate", help="speak a script (cues or text, already in --lang) into one timeline WAV")
+    n.add_argument("script", help="cues (.json, .srt, .vtt) or plain text (.txt, one utterance per line)")
+    n.add_argument("-o", "--output", required=True, help="the timeline .wav (mono, at the engine's rate)")
+    n.add_argument("--lang", required=True, help="the language the text is already in (ja, en, ...); nothing is translated")
+    n.add_argument("--engine", help="engine id (default: chatterbox)")
+    n.add_argument("--voice", help="engine voice (chatterbox: its built-in voice only)")
+    n.add_argument("--reference", help="reference voice for cloning: refused until the consent gate (roadmap step 6)")
+    n.add_argument("--consent", help="consent record for --reference (roadmap step 6)")
+    n.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
+    n.add_argument("--seed", type=int, default=0, help="sampling seed, recorded (default 0)")
+    n.add_argument("--on-overflow", choices=OVERFLOW_POLICIES, default="fail",
+                   help="a line still being spoken when the next cue starts: fail (default) or shift the later lines back")
+    n.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"engine time limit in seconds (default {DEFAULT_TIMEOUT:g})")
+    n.add_argument("--overwrite", action="store_true", help="replace an existing output")
+    n.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    n.add_argument("--offline", action="store_true")
+    n.add_argument("--json", action="store_true")
     return ap
+
+
+def _note(text: Optional[str]) -> Optional[Dict[str, Any]]:
+    if text is None:
+        return None
+    try:
+        doc = json.loads(text)
+    except ValueError as e:
+        raise DubbingError("INVALID_ARGUMENT", f"--translation-note is not JSON: {e}")
+    if not isinstance(doc, dict):
+        raise DubbingError("INVALID_ARGUMENT", "--translation-note must be a JSON object")
+    return doc
 
 
 def _emit(doc: Dict[str, Any], as_json: bool) -> None:
@@ -66,6 +100,15 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  op {op:14} implemented={o['implemented']} engine={o['engine']} ready={o['ready']}")
         for p in doc["problems"]:
             print(f"  problem: {p}")
+    elif doc.get("op") == "narrate":
+        out = doc["output"]
+        print(f"{out['path']}: {out['duration']}s, {out['sample_rate']} Hz, {doc['input']['lines']} line(s), engine {doc['engine']['id']}")
+        if doc["obligations"]["watermark"]:
+            print(f"  watermark: {doc['obligations']['watermark']['name']}")
+        for c in doc["obligations"]["credit"]:
+            print(f"  credit: {c}")
+        for w in doc["warnings"]:
+            print(f"  warning: {w}")
     elif "engines" in doc and "skill_id" not in doc:
         for eid, e in doc["engines"].items():
             credit = "credit required" if e["credit_required"] else "no credit"
@@ -101,6 +144,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.cmd == "engines":
             _emit({"ok": True, "skill": {"id": SKILL_ID, "version": __version__}, "offline": bool(args.offline),
                    "engines": engines_report(offline=args.offline)}, as_json)
+            return 0
+        if args.cmd == "narrate":
+            _emit(narrate(NarrateRequest(script_path=args.script, output_path=args.output, lang=args.lang, engine=args.engine,
+                                         voice=args.voice, reference_path=args.reference, consent_path=args.consent,
+                                         translation_note=_note(args.translation_note), seed=args.seed,
+                                         on_overflow=args.on_overflow, timeout=args.timeout, overwrite=args.overwrite,
+                                         ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
             return 0
     except DubbingError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)

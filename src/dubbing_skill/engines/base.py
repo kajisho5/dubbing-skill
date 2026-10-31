@@ -10,8 +10,9 @@ Statuses (doctor vocabulary): OK (installed and usable), MISSING (not installed,
 absent), INCOMPATIBLE (installed, but a version outside the supported range). An engine never downloads anything."""
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..errors import DubbingError
 
@@ -19,6 +20,12 @@ OK, MISSING, INCOMPATIBLE = "OK", "MISSING", "INCOMPATIBLE"
 STATUSES = (OK, MISSING, INCOMPATIBLE)
 OPS = ("narrate", "dub", "audio_description")
 KINDS = ("python", "local_http")
+CONSENT_STEP = 6                              # roadmap step of the consent gate for voice cloning (ADR-001)
+WORKER_ENV = "DUBBING_IN_WORKER"              # set by the worker process only; engine code is imported nowhere else
+
+
+def in_worker() -> bool:
+    return os.environ.get(WORKER_ENV) == "1"
 
 
 @dataclass(frozen=True)
@@ -64,7 +71,7 @@ class EngineRequest:
     lang: str
     output_path: str
     voice: Optional[str] = None               # engine voice / speaker id
-    reference_audio: Optional[str] = None     # voice cloning; refused without consent from step 6 on
+    reference_audio: Optional[str] = None     # voice cloning; refused until the consent gate (step 6) exists
     params: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -138,14 +145,30 @@ class Engine:
                                {"engine": self.id, "install": self.spec.install})
         return info
 
-    def process(self, req: EngineRequest) -> EngineResult:
+    def check_request(self, req: EngineRequest) -> None:
+        """Checks that need no engine code: run by the op before any work, and again in the worker. A reference voice
+        (voice cloning) is refused until the consent gate exists (ADR-001, roadmap step 6), whatever the engine."""
         if req.op not in self.spec.ops:
             raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} does not serve op {req.op!r}",
                                {"engine": self.id, "ops": list(self.spec.ops)})
+        if req.reference_audio is not None:
+            raise DubbingError("NOT_IMPLEMENTED", "a reference voice (voice cloning) needs a recorded consent of that person "
+                               "(ADR-001); the consent gate arrives in roadmap step 6 and no reference voice is accepted before "
+                               "then", {"engine": self.id, "roadmap_step": CONSENT_STEP, "policy": "voice_cloning"})
+        if req.lang not in self.spec.languages:
+            raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} does not speak {req.lang!r}",
+                               {"engine": self.id, "lang": req.lang, "languages": list(self.spec.languages)})
+
+    def process(self, req: EngineRequest) -> EngineResult:
+        self.check_request(req)
         self.require()
         raise DubbingError("NOT_IMPLEMENTED", f"engine {self.id!r} is installed, but synthesis is not implemented yet "
                            f"(roadmap step {self.spec.roadmap_step})", {"engine": self.id, "op": req.op,
                                                                         "roadmap_step": self.spec.roadmap_step})
+
+    def process_batch(self, reqs: List[EngineRequest]) -> List[EngineResult]:
+        """Several lines in one worker run. An engine that loads a model overrides this to load it once."""
+        return [self.process(r) for r in reqs]
 
 
 def missing(detail: str, what: str, **extra: Any) -> Dict[str, Any]:

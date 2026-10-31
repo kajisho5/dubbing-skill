@@ -34,9 +34,9 @@ jobs:
         run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['chatterbox','kokoro','style_bert_vits2','voicevox'], e; assert all(v['status']=='MISSING' and v['install'] for v in e.values()), e; assert d['checks']['translation']['engine'] is None"
 
   integration:
-    # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract and probe) and
-    # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001), so
-    # nothing may skip here.
+    # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract, probe and join) and
+    # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001): NARRATE
+    # runs on the fake Chatterbox. Nothing may skip here except the real-Chatterbox tests, which run in `engines`.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -53,15 +53,98 @@ jobs:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: python -m pip install -e .
-      - name: All tests run, none skipped
+      - name: All tests run; only the real-Chatterbox tests (engines job) may skip
         env:
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log
+          ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real Chatterbox"
       - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0)
         run: |
           dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
           python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4"
+
+  engines:
+    # Linux only, the real Chatterbox (ADR-005): chatterbox-tts 0.1.7 in its own virtual environment, as the README
+    # recommends (ADR-001: it pins torch and pulls in pykakasi, GPL-3.0-or-later, which never enters this package's
+    # environment), on CPU PyTorch 2.6.0 from the PyTorch CPU index. The six checkpoint files 0.1.7 loads are fetched
+    # once at a pinned Hugging Face revision and checked against the SHA-256 the repository publishes for them (LFS);
+    # the skill itself never downloads. The real-engine tests that skip everywhere else must run and pass here, and
+    # nothing else may skip.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      CHATTERBOX_VERSION: "0.1.7"
+      TORCH_VERSION: "2.6.0"
+      CHATTERBOX_HF_REVISION: 5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/ffmpeg-skill
+          path: vendor/ffmpeg-skill
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/AI-video-production-OS
+          path: vendor/AI-video-production-OS
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Chatterbox in its own virtual environment (CPU PyTorch)
+        run: |
+          set -eu
+          python -m venv "$RUNNER_TEMP/chatterbox"
+          cb="$RUNNER_TEMP/chatterbox/bin/python"
+          "$cb" -m pip install --upgrade pip
+          "$cb" -m pip install "torch==$TORCH_VERSION" "torchaudio==$TORCH_VERSION" --index-url https://download.pytorch.org/whl/cpu
+          "$cb" -m pip install "chatterbox-tts==$CHATTERBOX_VERSION"
+          "$cb" -m pip list
+          echo "DUBBING_CHATTERBOX_PYTHON=$cb" >> "$GITHUB_ENV"
+          echo "HF_HUB_CACHE=$RUNNER_TEMP/hf" >> "$GITHUB_ENV"
+      - name: Fetch the checkpoint files chatterbox-tts 0.1.7 loads (pinned revision, SHA-256 checked)
+        run: |
+          "$DUBBING_CHATTERBOX_PYTHON" - <<'EOF'
+          import hashlib, os
+          from huggingface_hub import hf_hub_download
+          rev = os.environ["CHATTERBOX_HF_REVISION"]
+          lfs_sha256 = {
+              "ve.pt": "4b16d836bc598509860f6fa068165a8bb5e9ac84f05582dfcf278a5a372879f1",
+              "t3_mtl23ls_v2.safetensors": "b1237586127ce98e7800a68e49938eb5092846862aabcb6e17b2fda7889a6c75",
+              "s3gen.pt": "9b9ff07e60b20c136e2b1b3d7563a24604e8d2c4c267888d1ee929dd0151d2a3",
+              "conds.pt": "6552d70568833628ba019c6b03459e77fe71ca197d5c560cef9411bee9d87f4e",
+          }
+          for name in ["ve.pt", "t3_mtl23ls_v2.safetensors", "s3gen.pt", "grapheme_mtl_merged_expanded_v1.json", "conds.pt",
+                       "Cangjie5_TC.json"]:
+              path = hf_hub_download("ResembleAI/chatterbox", name, revision=rev)
+              if name in lfs_sha256:
+                  h = hashlib.sha256()
+                  with open(path, "rb") as fh:
+                      for block in iter(lambda: fh.read(1 << 20), b""):
+                          h.update(block)
+                  assert h.hexdigest() == lfs_sha256[name], (name, h.hexdigest())
+              print(name, os.path.getsize(path))
+          EOF
+      - run: python -m pip install -e .
+      - name: doctor reports Chatterbox OK and NARRATE ready for text
+        run: |
+          dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); c=d['checks']['engines']['chatterbox']; assert c['status']=='OK' and c['model']=='t3_mtl23ls_v2.safetensors', c; n=d['checks']['operations']['narrate']; assert n['ready'] and n['inputs']['text']['ready'], n"
+      - name: All tests run, the real-engine ones included
+        env:
+          DUBBING_REAL_CHATTERBOX: "1"
+          DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
+          AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
+        run: |
+          set -o pipefail
+          export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
+          python -m unittest discover -s tests -v 2>&1 | tee test.log
+          ! grep -E "\.\.\. skipped" test.log
+          for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english; do
+            grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
+          done
+          { echo "### Real Chatterbox $CHATTERBOX_VERSION on CPU (NARRATE, text mode)"; echo;
+            echo "| lang | lines | timeline s | expected s | wall s | clips s | Perth found |"; echo "|---|---|---|---|---|---|---|";
+            cat "$DUBBING_MEASURE_LOG"; } | tee -a "$GITHUB_STEP_SUMMARY"

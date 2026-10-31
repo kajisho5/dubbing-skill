@@ -19,6 +19,7 @@ ERROR_TABLE: Dict[str, Tuple[int, bool]] = {
     "ENGINE_FAILED": (4, False),             # the engine ran and failed
     "ENGINE_TIMEOUT": (4, True),             # the engine exceeded --timeout and its process group was killed
     "INVALID_RESULT": (4, False),            # the engine's output failed validation; nothing is returned
+    "TIMING_OVERFLOW": (4, False),           # a spoken line runs past the start of the next cue (--on-overflow fail)
     "NOT_IMPLEMENTED": (5, False),           # declared in the contract, not implemented yet (see the roadmap step)
     "CANCELLED": (6, True),                  # interrupted by a signal
     "INTERNAL_ERROR": (7, False),            # a bug in this skill
