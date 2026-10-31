@@ -6,12 +6,14 @@ times. `--source-cues` names the source cues they translate; they are then check
 times), and each line records the hash of the source text it translates.
 
 DUB, step by step:
-  1. checks     numbers and policies; a reference voice is refused before anything is read (consent gate, roadmap
-                step 6); the programme and the cues are regular files; the output is a video (.mp4 / .mov / .mkv) or the
-                programme audio (.wav), is not an input and does not exist (unless --overwrite)
+  1. checks     numbers and policies; the programme and the cues are regular files; the output is a video (.mp4 / .mov /
+                .mkv) or the programme audio (.wav), is not an input and does not exist (unless --overwrite)
   2. cues       parsed and checked (cues.py): timed cues only; with --source-cues, the same segments as the source
-  3. voices     one voice per cue speaker (--speaker-voice SPEAKER=VOICE, else --voice, else the engine's default)
-  4. engine     the selected engine serves dub, reports OK and accepts every line, before any media work
+  3. voices     one voice per cue speaker (--speaker-voice SPEAKER=VOICE, else --voice, else the engine's default), or a
+                reference voice per speaker (--speaker-reference / --reference), each with the consent record of its
+                owner (--speaker-consent / --consent); a reference without a record is refused before anything is read
+  4. engine     the selected engine serves dub, reports OK and accepts every line (the consent records verified, ADR-009),
+                before any media work; each reference voice is probed through ffmpeg-skill
   5. programme  ffmpeg-skill is usable; the programme is probed: it has the chosen audio stream (and a video stream for
                 a video output), and every cue starts inside it
   6. engine     the worker runs the engine once on every line, killed on --timeout
@@ -41,7 +43,8 @@ from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill
 from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, output_kind, programme_layout, render, tolerance,
                      validate_output, watermark_summary)
-from .ops import _place, _run_dir, _usable_skill, clip_credits, refuse_reference, select_engine, unique_credits, validate_clip
+from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, not_an_output, select_engine, unique_consents,
+                  unique_credits, validate_clip, voice_request_fields)
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
 from .timing import DEFAULT_MAX_OVERRUN, Slot, check_limits, fit_lines, slots_for
@@ -64,8 +67,10 @@ class DubRequest:
     engine: Optional[str] = None
     voice: Optional[str] = None               # the voice for every speaker without its own
     speaker_voices: Dict[str, str] = field(default_factory=dict)
-    reference_path: Optional[str] = None      # refused until the consent gate exists (roadmap step 6)
-    consent_path: Optional[str] = None
+    reference_path: Optional[str] = None      # a reference voice for every speaker without its own (ADR-009)
+    consent_path: Optional[str] = None        # its owner's consent record
+    speaker_references: Dict[str, str] = field(default_factory=dict)
+    speaker_consents: Dict[str, str] = field(default_factory=dict)
     translation_note: Optional[Dict[str, Any]] = None
     seed: int = 0
     audio_stream: int = 0
@@ -92,9 +97,10 @@ def _check_numbers(req: DubRequest) -> None:
         raise DubbingError("INVALID_ARGUMENT", "--lang is required (the language the translated text is in)", {"lang": req.lang})
     if req.translation_note is not None and not isinstance(req.translation_note, dict):
         raise DubbingError("INVALID_ARGUMENT", "--translation-note must be a JSON object", {})
-    if not isinstance(req.speaker_voices, dict) or not all(isinstance(k, str) and k and isinstance(v, str) and v
-                                                           for k, v in req.speaker_voices.items()):
-        raise DubbingError("INVALID_ARGUMENT", "--speaker-voice takes SPEAKER=VOICE, both non-empty", {})
+    for flag, mapping in (("--speaker-voice", req.speaker_voices), ("--speaker-reference", req.speaker_references),
+                          ("--speaker-consent", req.speaker_consents)):
+        if not isinstance(mapping, dict) or not all(isinstance(k, str) and k and isinstance(v, str) and v for k, v in mapping.items()):
+            raise DubbingError("INVALID_ARGUMENT", f"{flag} takes SPEAKER=VALUE, both non-empty", {})
     check_limits(1.0, req.max_overrun)
     check_mix_numbers(req.duck, req.voice_gain)
 
@@ -140,6 +146,20 @@ def voice_for(req: DubRequest, speaker: Optional[str]) -> Optional[str]:
     return req.voice
 
 
+def reference_for(req: DubRequest, speaker: Optional[str]) -> Tuple[Optional[str], Dict[str, Any]]:
+    """(reference_audio, params) for a line: the speaker's own reference and consent, else the defaults. A reference
+    without its consent record is refused here, before anything is read (ADR-009)."""
+    own = speaker is not None and speaker in req.speaker_references
+    reference = req.speaker_references[speaker] if own else req.reference_path
+    consent = req.speaker_consents.get(speaker) if speaker is not None and speaker in req.speaker_consents else (
+        None if own else req.consent_path)
+    try:
+        return voice_request_fields(reference, consent)
+    except DubbingError as e:
+        e.details["speaker"] = speaker
+        raise
+
+
 def probe_programme(skill: Any, src: str, kind: str, audio_stream: int, script: Script) -> Dict[str, Any]:
     try:
         facts = skill.probe(src)
@@ -171,10 +191,13 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     """DUB: the programme at `req.input_path` with its dialogue replaced by the translated cues at `req.cues_path`,
     spoken by a local engine, written to `req.output_path`. `skill` is the ffmpeg-skill handle (located from
     `req.ffmpeg_skill_dir` when None)."""
-    refuse_reference(req.reference_path, req.consent_path, "dub")
     _check_numbers(req)
     side = [req.cues_path] + ([req.source_cues_path] if req.source_cues_path else [])
     src, dst, kind = check_media_paths(req.input_path, side, req.output_path, req.overwrite)
+    not_an_output(dst, req.reference_path, req.consent_path, *req.speaker_references.values(), *req.speaker_consents.values())
+    unused = sorted(set(req.speaker_consents) - set(req.speaker_references))
+    if unused:
+        raise DubbingError("INVALID_ARGUMENT", f"--speaker-consent for speaker(s) {unused} without --speaker-reference", {"speakers": unused})
     script = parse_script(os.path.abspath(req.cues_path), req.lang)
     if not script.timed:
         raise DubbingError("INVALID_ARGUMENT", "DUB needs timed cues (.json, .srt, .vtt): each line replaces the dialogue of its "
@@ -183,14 +206,17 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     if req.source_cues_path:
         source = parse_script(os.path.abspath(req.source_cues_path), "und")
         check_alignment(script, source)
+    line_voices = [reference_for(req, line.speaker) for line in script.lines]     # no reference without a record
     engine, report = select_engine("dub", req.engine, req.offline)
-    params: Dict[str, Any] = {"seed": req.seed}
     probe_reqs = [EngineRequest(op="dub", text=line.text, lang=req.lang, output_path="", voice=voice_for(req, line.speaker),
-                                params=params) for line in script.lines]
+                                reference_audio=reference, params=dict(voice_params, seed=req.seed))
+                  for line, (reference, voice_params) in zip(script.lines, line_voices)]
     for r in probe_reqs:
-        engine.check_request(r)
+        engine.check_request(r)                   # the consent records and the reference clips' hashes, before any work
     timeout = float(req.timeout)
     skill, info = _usable_skill(skill, req.ffmpeg_skill_dir, timeout)
+    for reference in sorted({r.reference_audio for r in probe_reqs if r.reference_audio}):
+        check_reference(skill, reference)
     in_facts = probe_programme(skill, src, kind, req.audio_stream, script)
     programme_end = float(in_facts["duration"])
 
@@ -199,7 +225,7 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
         clip_dir = os.path.join(run_dir, "clips")
         os.mkdir(clip_dir)
         reqs = [EngineRequest(op="dub", text=r.text, lang=r.lang, output_path=os.path.join(clip_dir, f"{k:04d}.wav"), voice=r.voice,
-                              params=dict(params)) for k, r in enumerate(probe_reqs)]
+                              reference_audio=r.reference_audio, params=dict(r.params)) for k, r in enumerate(probe_reqs)]
         results = run_engine_batch(engine.id, reqs, timeout, run_dir)
         clip_facts = []
         for k, (r, res) in enumerate(zip(reqs, results)):
@@ -252,7 +278,8 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
                           "provenance": build_provenance(op="dub", engine=engine_doc, text=line.text, output_path=r.output_path,
                                                          parameters=parameters, voice=res.extra.get("voice") or r.voice,
                                                          translation=req.translation_note, ffmpeg_skill=info.to_dict(),
-                                                         watermark=res.extra.get("watermark"), credits=clip_credits(engine, res))})
+                                                         watermark=res.extra.get("watermark"), credits=clip_credits(engine, res),
+                                                         consent=res.extra.get("consent"))})
         placed_clips = [c for c in clips if c["placed"]]
         watermark = watermark_summary(engine.spec.watermark, [c["provenance"]["watermark"] for c in placed_clips])
         credits = unique_credits(c["provenance"]["credits"] for c in placed_clips)
@@ -265,7 +292,8 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
                       "clips_sha256": [c["provenance"]["output"]["sha256"] for c in placed_clips]}
         provenance = build_provenance(op="dub", engine=engine_doc, text=full_text, output_path=final, parameters=parameters,
                                       voice=first.extra.get("voice") or req.voice, translation=req.translation_note,
-                                      ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits)
+                                      ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits,
+                                      consent=unique_consents(c["provenance"]["consent"] for c in placed_clips))
         _place(final, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

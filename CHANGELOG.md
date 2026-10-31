@@ -2,6 +2,17 @@
 
 ## 0.1.0 - unreleased
 
+Consent gate for voice cloning (roadmap step 6, ADR-009).
+
+- A reference voice is used only with a consent record (`dubbing/consent@1`).
+  - The record names who consented, when and for what (ops, engines, languages), with evidence files and the reference clip's SHA-256.
+  - Every field is checked. Evidence files must match their hashes, and so must the clip.
+  - Any problem is the new error `CONSENT_REQUIRED` (exit 2), listing every problem. No flag, option or environment variable skips it.
+- The record is checked before the clip is read, in the op before any engine work, and again in the worker. A record revoked between the two checks is refused before synthesis.
+- NARRATE: `--reference --consent`. DUB: `--reference --consent` and `--speaker-reference / --speaker-consent SPEAKER=PATH`. Chatterbox speaks in the reference voice (`audio_prompt_path`). VOICEVOX and Kokoro refuse a reference.
+- The verified record (who, when, scope, evidence and clip hashes) goes into each clip's provenance (`consent`). The contract publishes the record's fields under `policy.consent_record`.
+- Tests: 24 new security tests (`tests/test_consent.py`) and an integration test with the reference probed through the real ffmpeg-skill. The NARRATE consent tests now expect `CONSENT_REQUIRED` instead of `NOT_IMPLEMENTED`.
+
 DUB (roadmap step 5, ADR-008).
 
 - `dubbing dub <programme> <translated cues> --lang L -o <out.mp4|.mov|.mkv|.wav>` (tool `dubbing/dub`, schema `dubbing/dub@1`). `speech.dub` is `EXPERIMENTAL`.

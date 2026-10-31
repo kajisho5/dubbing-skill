@@ -19,8 +19,8 @@ import time
 import unittest
 from pathlib import Path
 
-from helpers import (FAKE_RATE, FFMPEG_SKILL_DIR, chatterbox_ready, env, fake_chatterbox_calls, fake_line_seconds, no_engines_env,
-                     run_cli, write_tone_wav)
+from helpers import (FAKE_RATE, FFMPEG_SKILL_DIR, chatterbox_ready, env, fake_chatterbox_calls, fake_line_seconds, make_consent,
+                     no_engines_env, run_cli, write_tone_wav)
 
 from dubbing_skill.doctor import doctor
 from dubbing_skill.dub import DubRequest, dub
@@ -126,6 +126,23 @@ class NarrateIntegrationTests(unittest.TestCase):
         else:
             self.assertNotEqual(code, 0)
             self.assertIn("no video stream", err)
+
+    def test_narrate_in_a_consented_reference_voice(self):
+        """The consent gate (ADR-009) with the reference probed by the real ffmpeg-skill."""
+        script = _write(os.path.join(self.tmp.name, "s.txt"), "Hello there.\n")
+        ref = write_tone_wav(os.path.join(self.tmp.name, "voice.wav"), seconds=2.0, rate=FAKE_RATE)
+        record = make_consent(self.tmp.name, ref)
+        with chatterbox_ready(self.tmp.name) as site:
+            doc = narrate(NarrateRequest(script_path=script, output_path=self.out, lang="en", reference_path=ref,
+                                         consent_path=record), skill=self.skill)
+            self.assertEqual([c["audio_prompt_path"] for c in fake_chatterbox_calls(site) if c["call"] == "generate"], [ref])
+        self.assertEqual(doc["clips"][0]["provenance"]["consent"]["voice_owner"], "山田花子")
+        not_audio = _write(os.path.join(self.tmp.name, "voice.txt.wav"), "not audio")
+        with chatterbox_ready(self.tmp.name), self.assertRaises(DubbingError) as e:
+            narrate(NarrateRequest(script_path=script, output_path=os.path.join(self.tmp.name, "b.wav"), lang="en",
+                                   reference_path=not_audio, consent_path=make_consent(self.tmp.name, not_audio, name="n.json")),
+                    skill=self.skill)
+        self.assertEqual(e.exception.code, "UNSUPPORTED_MEDIA")
 
     def test_cli_narrate_end_to_end(self):
         script = _write(os.path.join(self.tmp.name, "s.txt"), "Hello there.\nSecond line.\n")

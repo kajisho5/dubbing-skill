@@ -65,8 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--accept-unverified-voice-terms", action="store_true",
                    help="use a VOICEVOX character whose terms this skill has not verified (you checked them); the credit is "
                         "recorded as unverified (ADR-006)")
-    n.add_argument("--reference", help="reference voice for cloning: refused until the consent gate (roadmap step 6)")
-    n.add_argument("--consent", help="consent record for --reference (roadmap step 6)")
+    n.add_argument("--reference", help="a reference voice to speak in (voice cloning; chatterbox): needs --consent")
+    n.add_argument("--consent", help="the consent record (dubbing/consent@1 JSON) of the person whose voice --reference is: who "
+                                     "consented, when, for what, and the evidence files (ADR-009); there is no way to skip it")
     n.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
     n.add_argument("--seed", type=int, default=0, help="sampling seed, recorded (default 0)")
     n.add_argument("--on-overflow", choices=OVERFLOW_POLICIES, default="fail",
@@ -87,8 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--voice", help="the voice for every speaker without its own (chatterbox: its built-in voice only)")
     b.add_argument("--speaker-voice", action="append", default=[], metavar="SPEAKER=VOICE",
                    help="a voice for one cue speaker (repeatable)")
-    b.add_argument("--reference", help="reference voice for cloning: refused until the consent gate (roadmap step 6)")
-    b.add_argument("--consent", help="consent record for --reference (roadmap step 6)")
+    b.add_argument("--reference", help="a reference voice for every speaker without its own (voice cloning): needs --consent")
+    b.add_argument("--consent", help="the consent record (dubbing/consent@1) of the person whose voice --reference is (ADR-009)")
+    b.add_argument("--speaker-reference", action="append", default=[], metavar="SPEAKER=PATH",
+                   help="a reference voice for one cue speaker (repeatable); needs --speaker-consent for that speaker")
+    b.add_argument("--speaker-consent", action="append", default=[], metavar="SPEAKER=PATH",
+                   help="the consent record of that speaker's voice owner (repeatable)")
     b.add_argument("--audio-stream", type=int, default=0, help="the programme's audio stream to dub, 0-based (default 0)")
     b.add_argument("--max-overrun", type=float, default=DEFAULT_MAX_OVERRUN,
                    help="seconds a line may run past its cue end, never past the next cue or the programme's end (default 0)")
@@ -248,7 +253,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _emit(dub(DubRequest(input_path=args.input, cues_path=args.cues, output_path=args.output, lang=args.lang,
                                  source_cues_path=args.source_cues, engine=args.engine, voice=args.voice,
                                  speaker_voices=_pairs(args.speaker_voice, "--speaker-voice"), reference_path=args.reference,
-                                 consent_path=args.consent, translation_note=_note(args.translation_note), seed=args.seed,
+                                 consent_path=args.consent, speaker_references=_pairs(args.speaker_reference, "--speaker-reference"),
+                                 speaker_consents=_pairs(args.speaker_consent, "--speaker-consent"), translation_note=_note(args.translation_note), seed=args.seed,
                                  audio_stream=args.audio_stream, max_overrun=args.max_overrun, on_unfit=args.on_unfit,
                                  duck=args.duck, voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
                                  ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
