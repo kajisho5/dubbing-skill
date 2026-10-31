@@ -13,6 +13,8 @@ from .cues import MAX_LINE_CHARS, MAX_LINES
 from .ffmpeg_skill import FLAGS_USED, OPTIONAL_TOOLS, OPTIONAL_USE, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .ops import NARRATE_SCHEMA
 from .provenance import ENGINE_FIELDS
+from .timing import (DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, FIT_SCHEMA, MAX_OVERRUN_LIMIT, RENDER_GAP, TEMPO_LIMIT,
+                     UNFIT_POLICIES)
 
 CONTRACT_VERSION = "1.0"
 CAPABILITY_IDS = {"narrate": "speech.narrate", "dub": "speech.dub", "audio_description": "speech.audio_description"}
@@ -64,6 +66,23 @@ def tools() -> list:
                     "mutates_input": False, "deterministic": False, "implemented": IMPLEMENTED_OPS[op], "roadmap_step": OP_STEP[op],
                     "engine": DEFAULT_ENGINE[op], "engines": engines_for(op), **spec})
     out += [
+        {"tool_id": f"{SKILL_ID}/fit", "role": "analysis", "writes_media": False, "mutates_input": False, "deterministic": True,
+         "implemented": True, "roadmap_step": 4,
+         "description": "Timing fit (ADR-007): one clip per cue measured through ffmpeg-skill/probe against its cue window; "
+                        "per line fit (tempo 1.0, silence after), tempo (the smallest speed-up within --max-tempo) or unfit "
+                        "(reported with the reason, the tempo it would need and the seconds over; never cut, never placed); "
+                        "the silence before each placed line and after the last. Writes no media",
+         "inputs": ["cues (CUES_INPUT: .json, .srt, .vtt)", "one audio clip per cue, in cue order"],
+         "argv": ["fit", "<cues.json|cues.srt|cues.vtt>", "<clip>...", f"[--max-tempo {DEFAULT_MAX_TEMPO:g}]",
+                  f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|report]", "[--lang <ja>]", "[--timeout 120]",
+                  "[--ffmpeg-skill <dir>]", "--json"],
+         "limits": {"max_tempo": {"default": DEFAULT_MAX_TEMPO, "range": [1.0, TEMPO_LIMIT]},
+                    "max_overrun": {"default": DEFAULT_MAX_OVERRUN, "range": [0.0, MAX_OVERRUN_LIMIT], "unit": "s",
+                                    "bounded_by": "the next cue's start"},
+                    "slow_down": False, "tempo_step": 0.001, "on_unfit": list(UNFIT_POLICIES)},
+         "statuses": {"fit": "spoken at tempo 1.0", "tempo": "sped up within --max-tempo",
+                      "unfit": "over_limit | empty_slot | empty_clip | not_measured: reported, TIMING_OVERFLOW unless --on-unfit report"},
+         "render": RENDER_GAP, "schema": FIT_SCHEMA},
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engines, ffmpeg-skill) and how to get it; never downloads",
          "argv": ["doctor", "[--offline]", "[--ffmpeg-skill <dir>]", "--json"], "schema": DOCTOR_SCHEMA},

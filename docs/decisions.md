@@ -188,7 +188,7 @@ Roadmap step 2: text or cues -> clips -> timeline WAV, done when the duration is
 - ffmpeg-skill: `pad` on audio-only input (its graph already has `adelay` and `apad`), declared `audio_only: true`. Alternatively a join that takes gaps or start times. Timed cues need no code change here once either exists.
 - Round trip through transcription-skill on the Japanese fixture (ADR-001) before NARRATE is called stable.
 - Chatterbox V3 (`t3_mtl23ls_v3.safetensors`): adopt it when a released `chatterbox-tts` loads it. Then the version range, `MODEL_FILES` and the CI pins move together.
-- Step 4 (timing fit) replaces the overrun warning with fitting. Step 6 (consent) replaces the `NOT_IMPLEMENTED` refusal of `--reference`.
+- Step 4 (timing fit) plans the fitting (`dubbing fit`, ADR-007). NARRATE applies it once ffmpeg-skill can change tempo and pad on audio-only input; until then its overrun warning points at `dubbing fit`. Step 6 (consent) replaces the `NOT_IMPLEMENTED` refusal of `--reference`.
 
 ## ADR-006 VOICEVOX engine: the app's own HTTP API on loopback, a credit per character, unverified characters refused
 
@@ -263,3 +263,55 @@ It is feasible, and it runs on every pull request.
 - Check the terms of more characters against their own terms pages, and add them to `VERIFIED_CHARACTERS` with their exact credit strings. Candidates: the other zunko.jp characters (東北ずん子, 東北きりたん, 東北イタコ, 九州そら, 中国うさぎ, 中部つるぎ, あんこもん), which use the same terms page as ずんだもん.
 - A voice per cue speaker (`speaker` in the cues) belongs to DUB (step 5).
 - `ecosystem.json` (AI-video-production-OS): the VOICEVOX note can add "未確認キャラは明示的な同意フラグなしでは拒否".
+
+## ADR-007 Timing fit: measure each clip against its cue window, plan tempo and silence, report what cannot fit
+
+### Context
+
+Roadmap step 4: fit each line into its cue window (tempo limit, pad, overflow report), done when unit tests cover overflow and underflow. NARRATE (ADR-005) only reports an overrun, and DUB (step 5) needs every translated line to fit its source segment. Translation stays a caller input (ADR-003): the lines are already spoken, by NARRATE or any engine, and this step decides how each clip fits. Checked against ffmpeg-skill 2.23.1 (main, 2026-10-31).
+
+### Findings
+
+- **ffmpeg-skill has no audio-only tempo change.** `fit --method speed` and `speedramp` change tempo with an `atempo` chain, but both declare `audio_only: false`, and `fit` refuses a WAV with `INPUT_INVALID`. `pad` still needs a video stream (ADR-005). `cut` is audio-only, but it trims, and a line is never trimmed here. So a fit plan can be measured and decided today, but not rendered.
+- **Measurement is available.** `ffmpeg-skill/probe` reads every clip's duration and audio stream. That is the only measurement used.
+
+### Decision
+
+- **A planning tool, not a media op.** `dubbing fit <cues> <clip>... --json` (`timing.py`, tool `dubbing/fit`, role `analysis`, schema `dubbing/fit@1`) takes cues (`.json`, `.srt`, `.vtt`; plain text has no window and is refused) and one clip per cue, in cue order. It measures every clip through ffmpeg-skill/probe and returns a plan. It writes no media and is deterministic: the same cues and clips give the same plan. The decisions are pure functions (`fit_line`, `fit_lines`) and are unit-tested without FFmpeg.
+- **Windows.** A line's slot is its cue, `end - start`. Its room is the slot plus up to `--max-overrun` seconds (default 0, at most 5) past the cue end, never past the next cue's start.
+- **Per line, in this order:**
+  - `fit`: measured <= slot (within 1 ms). Spoken at tempo 1.0, and the rest of the slot is `slack`, silence.
+  - `tempo`: the smallest speed-up that ends the line inside its slot, at most `--max-tempo` (default 1.25, accepted range 1.0 to 2.0). The tempo is rounded **up** to 1/1000, so the fitted length never exceeds the window.
+  - Only when even `--max-tempo` cannot end the line inside its slot is the room used, with the smallest tempo that ends inside it (tempo 1.0 counts as `fit`). The overrun past the cue end is reported per line and in the warnings. Speed-up comes first because staying inside the cue keeps the line on its picture.
+  - `unfit`: nothing within the limits works. The reason is one of `over_limit` (measured / max tempo > room), `empty_slot` (no room: a zero-length cue, or the next cue starts at or before this one), `empty_clip` (shorter than 50 ms, as NARRATE's clip check) or `not_measured`. The plan gives the tempo it would need and the seconds it is over at the maximum tempo. An unfit line is never cut, never sped up past the limit and never placed. A line is never said to fit without a measurement.
+- **Never slowed down.** A short line keeps its tempo and is followed by silence. Slowing speech to fill a slot sounds wrong and changes nothing for sync.
+- **Silence.** Placed lines start at their cue's start. `lead` is the silence before each one (from the previous placed line's end), and `tail` is the silence after the last one up to the last cue's end. These are the `--start` / `--end` values ffmpeg-skill/pad would get, so the plan has the same shape as NARRATE's timeline plan.
+- **Unfit policy.** With `--on-unfit fail` (the default), any unfit line fails with `TIMING_OVERFLOW` (exit 4), and the error details carry `unfit` and the whole plan. With `--on-unfit report`, the plan is returned (`summary.all_fit: false`, the line indexes in a warning). NARRATE's `--on-overflow fail` follows the same pattern.
+- **Checks before measuring.** The limits, the policy, the timeout, the cues, the clip count (one per cue) and that each clip is a file are all checked before ffmpeg-skill is located. A clip ffmpeg-skill cannot read, or one with no audio stream, is `UNSUPPORTED_MEDIA` naming the clip.
+- **Rendering waits on ffmpeg-skill.** The plan carries `render: {done: false, reason, needs}`. NARRATE does not apply tempo, and its overrun warning now points at `dubbing fit`. ffmpeg-skill is finished and is not changed from here.
+- **Rejected:**
+  - Applying tempo with Python (resampling or WSOLA in the `wave` module). That is a media step outside ffmpeg-skill (ADR-002), and resampling changes pitch.
+  - VOICEVOX `speedScale` re-synthesis. It is engine-specific, Chatterbox has no equivalent, and it belongs in DUB once a plan exists.
+  - Trimming a clip's leading or trailing silence. It needs a silence measurement through ffmpeg-skill. Today the clip is measured whole, which errs on the side of reporting a line as too long.
+
+### Tests
+
+`tests/test_timing.py`, 31 tests:
+
+- Unit, no FFmpeg:
+  - Exact fit, and within 1 ms.
+  - Padding a short line, never slowing it.
+  - Speed-up within the limit, the tempo rounded up, and exactly at the limit.
+  - Over the limit reported with the needed tempo and the excess.
+  - Overrun room used only when the slot cannot hold the line, and never past the next cue.
+  - `--max-tempo 1.0`, zero-length and negative-room slots, empty and unmeasured clips.
+  - Lead, slack and tail; unfit lines left out of the layout.
+  - 2000 lines; limit and count checks; plain text refused.
+- The op on WaveSkill, with non-ASCII directory and file names and Japanese cue text (UTF-8 everywhere, Windows included): the policy, SRT cues, every check before any measurement, an unreadable clip, CLI refusals and the contract entry.
+- Integration (CI's integration job): WAVs written by the test, measured through the real ffmpeg-skill/probe, through the op and through the CLI (`TIMING_OVERFLOW` by default, all fitting with `--max-tempo 2`).
+
+### Follow-ups
+
+- ffmpeg-skill: an audio-only tempo change (`atempo`, declared `audio_only`) and audio-only `pad` (ADR-005). Once both exist, NARRATE and DUB render the plan with no change to the decisions.
+- DUB (step 5) consumes the plan per translated line.
+- Measure the speech inside each clip (leading and trailing silence) through ffmpeg-skill, so a padded TTS clip is not counted as longer than its speech.
