@@ -2,6 +2,15 @@
 
 ## 0.1.0 - unreleased
 
+SKILL.md, CI and the agent handoff (roadmap step 9, ADR-012).
+
+- `SKILL.md`: workflow, request → command, consent, report format, pitfalls and boundaries. `tests/test_skill_md.py` keeps it true to the CLI (commands, flags, error codes, the consent rule).
+- CI:
+  - `unit` checks that the contract publishes all three ops `EXPERIMENTAL` and the consent record with no bypass.
+  - `integration` checks that doctor sees all ops implemented and gap detection usable against the real ffmpeg-skill.
+  - `engines` must pass `test_real_chatterbox_dubs_a_video`, and `voicevox` must pass `test_real_voicevox_describes_a_video`.
+- ADR-012 lists the contract changes of steps 5 to 8 for video-production-agent's adapter (not changed here): commands, inputs, the new error code, results, provenance, the ffmpeg-skill tools, and engines.
+
 Style-Bert-VITS2 and Kokoro synthesis (roadmap step 8, ADR-011).
 
 - Style-Bert-VITS2 (AGPL-3.0) speaks through your own API server on loopback: `POST /voice`, query parameters only, as read from `server_fastapi.py`. It is never imported, bundled or installed.

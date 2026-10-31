@@ -26,6 +26,8 @@ AI narration (TTS), voice replacement (dubbing) and audio description, timed to 
 | DUB | `speech.dub` | Chatterbox Multilingual | `EXPERIMENTAL` | 5 ([ADR-008](docs/decisions.md)) |
 | AUDIO_DESCRIPTION | `speech.audio_description` | Chatterbox Multilingual | `EXPERIMENTAL` | 7 ([ADR-010](docs/decisions.md)) |
 
+How an agent or Claude should use the skill (workflow, request → command, consent, pitfalls) is in [SKILL.md](SKILL.md).
+
 **Translation is not done here.** Every op takes cues whose text is already in the target language. The caller supplies them, and no translation engine is chosen ([ADR-003](docs/decisions.md)).
 
 ```bash
@@ -154,12 +156,13 @@ Unit tests need no engine, no weights, no FFmpeg and no network:
 - Kokoro runs through the real worker on a fake `kokoro` package that loads local files only. The fake VOICEVOX answers `/version`, `/speakers`, `/audio_query` and `/synthesis` in the shapes of voicevox_engine 0.26.0, and refuses any other request shape.
 - NARRATE runs the real worker on a fake `chatterbox` package that makes tones or silence of a known length.
 - The consent gate is tested as a security boundary: every way a record can fail, the record checked before the clip is read and again in the worker, and no option that skips it.
+- SKILL.md is checked against the CLI: every command and flag it names exists, every command is in it, and every error code it names is real.
 - AUDIO_DESCRIPTION has a placement test: every description inside its gap and its cue, and the programme untouched sample for sample elsewhere.
 - DUB runs on a WAV programme with WaveSkill: the programme is checked sample for sample between lines, and under each line it must be the programme lowered by `--duck` plus the line.
 - Timing fit is tested as pure decisions (exact fit, speed-up, over the limit, padding, empty and zero-length slots, 2000 lines) and on WAVs with non-ASCII names.
 - A WAV-only stand-in replaces ffmpeg-skill.
 
-The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join, timing fit through its probe, and DUB on a test video made with FFmpeg's own test sources, through probe, audio, cut and join (audio and picture must last as long as each other). The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files. The real-VOICEVOX tests run only with `DUBBING_REAL_VOICEVOX=1`, and skip when the app is absent. CI's `voicevox` job sets it, after starting the official CPU image 0.26.0 (pinned by digest) on 127.0.0.1:50021.
+The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join, timing fit through its probe, and DUB on a test video made with FFmpeg's own test sources, through probe, audio, cut and join (audio and picture must last as long as each other). The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files. The real-VOICEVOX tests run only with `DUBBING_REAL_VOICEVOX=1`, and skip when the app is absent. CI's `voicevox` job sets it, after starting the official CPU image 0.26.0 (pinned by digest) on 127.0.0.1:50021. The real engines also run an op on a test video: the `engines` job dubs one line with Chatterbox, and the `voicevox` job adds an audio description inside a detected gap ([ADR-012](docs/decisions.md)).
 
 ## Licence
 

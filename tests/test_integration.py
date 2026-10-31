@@ -328,6 +328,26 @@ class RealChatterboxTests(unittest.TestCase):
     def test_real_chatterbox_narrates_english(self):
         self.speak("en", ["Welcome to the conference.", "The next talk starts in five minutes."])
 
+    def test_real_chatterbox_dubs_a_video(self):
+        # DUB end to end with the real engine (roadmap step 9's CI): one English line over a 6 s test video, ducked, back
+        # into the video; audio and picture must match and the Perth mark must be read back. (No docstring: the CI step
+        # greps for "<name> ... ok" on one line.)
+        video = make_programme(os.path.join(self.tmp.name, "talk.mp4"), seconds=6.0)
+        cues = _write(os.path.join(self.tmp.name, "en.json"), json.dumps([{"start": 0.3, "end": 5.8, "text": "Welcome to the conference."}]))
+        out = os.path.join(self.tmp.name, "dubbed.mp4")
+        t0 = time.time()
+        doc = dub(DubRequest(input_path=video, cues_path=cues, output_path=out, lang="en", on_unfit="keep", timeout=3000), skill=self.skill)
+        facts = self.skill.probe(out)
+        self.assertLessEqual(abs(float(facts["audio"]["duration"]) - float(facts["video"]["duration"])), 0.1, facts)
+        self.assertEqual(doc["clips"][0]["provenance"]["watermark"]["detected"], True)
+        self.assertEqual(doc["engine"]["id"], "chatterbox")
+        log = os.environ.get("DUBBING_MEASURE_LOG")
+        if log:
+            with open(log, "a", encoding="utf-8") as fh:
+                fh.write(f"| en (DUB) | 1 | {doc['output']['duration']:.2f} | {doc['output']['expected_duration']:.2f} | "
+                         f"{time.time() - t0:.1f} | {doc['clips'][0]['duration']:.2f} ({doc['clips'][0]['status']}) | "
+                         f"{doc['obligations']['watermark']['detected']}/1 |\n")
+
 
 REAL_VOICEVOX = os.environ.get("DUBBING_REAL_VOICEVOX") == "1"
 
@@ -372,6 +392,23 @@ class RealVoicevoxTests(unittest.TestCase):
                 fh.write(f"| ja | {len(lines)} | {doc['output']['duration']:.2f} | {doc['output']['expected_duration']:.2f} | "
                          f"{time.time() - t0:.1f} | {', '.join('%.2f' % c['duration'] for c in doc['clips'])} | "
                          f"{doc['obligations']['credit'][0]} |\n")
+
+    def test_real_voicevox_describes_a_video(self):
+        # AUDIO_DESCRIPTION end to end with the real engine (roadmap step 9's CI): a description in the quiet stretch that
+        # ffmpeg-skill/silence finds, with the VOICEVOX credit; audio and picture must match. (No docstring: see above.)
+        video = make_programme(os.path.join(self.tmp.name, "talk.mp4"), seconds=8.0, quiet=((2.0, 6.5),))
+        desc = _write(os.path.join(self.tmp.name, "desc.json"), json.dumps([{"start": 2.3, "end": 6.3, "text": "拍手が起こる。"}],
+                                                                           ensure_ascii=False))
+        out = os.path.join(self.tmp.name, "described.mp4")
+        doc = describe(DescribeRequest(input_path=video, descriptions_path=desc, output_path=out, lang="ja", engine="voicevox",
+                                       detect_gaps=True, timeout=1200), skill=self.skill)
+        clip = doc["clips"][0]
+        self.assertTrue(clip["placed"], clip)
+        self.assertLessEqual(clip["gap"]["start"], clip["start"])
+        self.assertLessEqual(clip["end"], clip["gap"]["end"] + 1e-3)
+        self.assertEqual(doc["obligations"]["credit"], ["VOICEVOX:ずんだもん"])
+        facts = self.skill.probe(out)
+        self.assertLessEqual(abs(float(facts["audio"]["duration"]) - float(facts["video"]["duration"])), 0.1, facts)
 
     def test_real_voicevox_speakers_and_terms(self):
         # the verified table (style ids, uuids, names) matches the real app, and a character outside it is refused
