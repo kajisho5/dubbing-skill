@@ -16,7 +16,8 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
-from helpers import OS_DIR, ROOT, closed_port_url, env, fake_app, fake_hf_file, no_engines_env, run_cli
+from helpers import (OS_DIR, ROOT, closed_port_url, env, fake_app, fake_chatterbox_weights, fake_hf_file, no_engines_env,
+                     run_cli)
 
 from dubbing_skill import SKILL_ID, __version__
 from dubbing_skill.contract import CAPABILITY_IDS, contract
@@ -69,8 +70,10 @@ class ContractTests(unittest.TestCase):
         for p in c["provides"]:
             self.assertEqual(set(p), {"id", "lifecycle", "tool_id"})
             self.assertIn(p["tool_id"], tool_ids)
-            self.assertEqual(p["lifecycle"], "PROPOSED")       # no op is implemented in this release (ADR-002)
-        self.assertFalse(any(t["implemented"] for t in c["tools"] if t["role"] == "transformation"))
+        # an op moves from PROPOSED to EXPERIMENTAL in the PR that implements it (ADR-002): NARRATE in step 2 (ADR-005)
+        self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]},
+                         {"speech.narrate": "EXPERIMENTAL", "speech.dub": "PROPOSED", "speech.audio_description": "PROPOSED"})
+        self.assertEqual([t["tool_id"] for t in c["tools"] if t["role"] == "transformation" and t["implemented"]], ["dubbing/narrate"])
         for d in c["dependencies"]:
             self.assertIsInstance(d["version_range"], str)
             self.assertFalse(d["version_range"].replace(".", "").isdigit(), d)
@@ -204,23 +207,31 @@ class PythonEngineAvailabilityTests(unittest.TestCase):
                 r = eng.report()
                 self.assertEqual((r["status"], r["missing"]), ("MISSING", "package"))
                 self.assertIn("chatterbox-tts", r["install"])
-            ok_pkgs = pkgs({"chatterbox-tts": "0.1.7"}, {"chatterbox": True})
+            ok_pkgs = pkgs({"chatterbox-tts": "0.1.7"}, {"chatterbox": True, "pykakasi": True})
             with mock.patch.object(chatterbox, "python_packages", return_value=pkgs({"chatterbox-tts": "0.1.6"}, {"chatterbox": True})):
                 self.assertEqual(eng.inspect()["status"], "INCOMPATIBLE")
+            with mock.patch.object(chatterbox, "python_packages", return_value=pkgs({"chatterbox-tts": "0.1.7"}, {"chatterbox": True})):
+                r = eng.inspect()                                  # without its Japanese G2P (ADR-005)
+                self.assertEqual((r["status"], r["missing"]), ("MISSING", "package"))
+                self.assertIn("pykakasi", r["detail"])
             with mock.patch.object(chatterbox, "python_packages", return_value=ok_pkgs):
                 r = eng.inspect()
                 self.assertEqual((r["status"], r["missing"], r["version"]), ("MISSING", "model", "0.1.7"))
                 with self.assertRaises(DubbingError) as e:
                     eng.require()
                 self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")
+                # the V3 checkpoint alone is not what chatterbox-tts 0.1.7 loads (ADR-005)
                 fake_hf_file(self.cache, "ResembleAI/chatterbox", "t3_mtl23ls_v3.safetensors")
+                self.assertEqual(eng.inspect()["missing"], "model")
+                fake_chatterbox_weights(self.cache)
                 r = eng.report()
-                self.assertEqual((r["status"], r["model"], r["install"]), ("OK", "t3_mtl23ls_v3.safetensors", None))
+                self.assertEqual((r["status"], r["model"], r["install"]), ("OK", "t3_mtl23ls_v2.safetensors", None))
 
     def test_chatterbox_explicit_model_dir_is_never_replaced_by_the_cache(self):
-        fake_hf_file(self.cache, "ResembleAI/chatterbox", "t3_mtl23ls_v3.safetensors")
+        fake_chatterbox_weights(self.cache)
         with self.hf(DUBBING_CHATTERBOX_MODEL_DIR=os.path.join(self.cache, "elsewhere")), \
-                mock.patch.object(chatterbox, "python_packages", return_value=pkgs({"chatterbox-tts": "0.1.7"}, {"chatterbox": True})):
+                mock.patch.object(chatterbox, "python_packages",
+                                  return_value=pkgs({"chatterbox-tts": "0.1.7"}, {"chatterbox": True, "pykakasi": True})):
             self.assertEqual(get_engine("chatterbox").inspect()["missing"], "model")
 
     def test_kokoro_needs_japanese_g2p_and_weights(self):

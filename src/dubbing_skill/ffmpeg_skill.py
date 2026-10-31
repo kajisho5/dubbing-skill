@@ -10,10 +10,17 @@ voice into the video and loudness are ffmpeg-skill tool calls (ADR-002, audio-pr
 
 Which ffmpeg-skill tools are used, and for what (the roadmap's wiring):
   probe     source facts (duration, audio streams) before an op, clip / output validation after it
-  join      clips -> one timeline WAV at a fixed rate and layout (--sample-rate, --channels), step 2
+  join      clips -> one timeline WAV, butt-joined (--transition none) at one rate and layout (--sample-rate,
+            --channels), step 2 (NARRATE, ADR-005)
   audio     --replace: the dubbed track into the video (step 5); --music --duck: narration or audio description over
             the programme audio, ducked (step 7); --audio-stream picks the source stream; --overwrite only on request
   loudness  --measure-only before mixing, then normalisation of the voice track to the target (-I / --lufs)
+
+Optional (OPTIONAL_TOOLS): used only when the checkout declares the tool audio_only with these flags; otherwise the
+path that needs it is refused with FFMPEG_SKILL_UNAVAILABLE before any work, and doctor says so.
+  pad       --start / --end silence around a clip, to place it at its cue time on the timeline (NARRATE with cues).
+            ffmpeg-skill 2.23.0's pad needs a video stream ("input has no video stream") and declares
+            audio_only: false, so timed cues are refused today (ADR-005)
 """
 from __future__ import annotations
 
@@ -32,11 +39,15 @@ ENV_DIR_KEYS = ("DUBBING_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
 TOOLS_USED = ("probe", "join", "audio", "loudness")
 FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "probe": ("inputs",),
-    "join": ("inputs", "output", "sample_rate", "channels", "json"),
+    "join": ("inputs", "output", "transition", "sample_rate", "channels", "json"),
     "audio": ("input", "output", "replace", "music", "duck", "audio_stream", "overwrite", "json"),
     "loudness": ("input", "output", "lufs", "measure_only", "overwrite", "json"),
 }
 AUDIO_ONLY_TOOLS = ("probe", "join", "audio", "loudness")
+OPTIONAL_TOOLS: Dict[str, Tuple[str, ...]] = {
+    "pad": ("input", "output", "start", "end", "json"),
+}
+OPTIONAL_USE = {"pad": "silence before / after a clip, to place timed cues on the NARRATE timeline (ADR-005)"}
 
 
 @dataclass
@@ -52,6 +63,24 @@ class SkillInfo:
     def supported(self) -> bool:
         return not self.problems
 
+    def optional_problem(self, tool: str) -> Optional[str]:
+        """None when the optional `tool` is usable on audio-only input with its flags, else why not."""
+        spec = self.tools.get(tool)
+        if spec is None:
+            return f"ffmpeg-skill has no {tool!r} tool"
+        if spec.get("audio_only") is not True:
+            return f"ffmpeg-skill/{tool} does not declare audio_only (it needs a video stream)"
+        props = (spec.get("input_schema") or {}).get("properties") or {}
+        absent = [f for f in OPTIONAL_TOOLS[tool] if f not in props]
+        return f"ffmpeg-skill/{tool} lacks flag(s) {absent}" if absent else None
+
+    def optional(self) -> Dict[str, Dict[str, Any]]:
+        out = {}
+        for tool in OPTIONAL_TOOLS:
+            problem = self.optional_problem(tool) if self.tools else "contract not read"
+            out[tool] = {"usable": problem is None, "for": OPTIONAL_USE[tool], "problem": problem}
+        return out
+
     def takes_flag(self, tool: str, flag: str) -> bool:
         props = ((self.tools.get(tool) or {}).get("input_schema") or {}).get("properties") or {}
         return isinstance(props, dict) and flag in props
@@ -59,7 +88,7 @@ class SkillInfo:
     def to_dict(self) -> Dict[str, Any]:
         return {"directory": str(self.directory), "version": self.version, "contract_version": self.contract_version,
                 "tools_used": [t for t in TOOLS_USED if t in self.tools], "problems": list(self.problems),
-                "warnings": list(self.warnings),
+                "warnings": list(self.warnings), "optional_tools": self.optional(),
                 "compatibility": "capability detection: tools and flags read from this checkout's contract; no version window"}
 
 
@@ -115,7 +144,7 @@ class FfmpegSkill:
                                 f"scripts/{{{','.join(TOOLS_USED)}}}.py)", {"tried": tried})
 
     def script(self, name: str) -> str:
-        if name not in TOOLS_USED + ("_contract",):
+        if name not in TOOLS_USED + tuple(OPTIONAL_TOOLS) + ("_contract",):
             raise DubbingError("INTERNAL_ERROR", f"{name!r} is not on the adapter allowlist")
         return str(self.directory / "scripts" / f"{name}.py")
 
@@ -160,6 +189,36 @@ class FfmpegSkill:
             raise DubbingError("UNSUPPORTED_MEDIA", f"ffmpeg-skill/probe could not read {os.path.basename(path)}: {tail}",
                                     {"tool": "ffmpeg-skill/probe", "exit_code": code})
         return data
+
+    def _tool(self, name: str, args: List[str], timeout: Optional[float]) -> Dict[str, Any]:
+        """Run ffmpeg-skill/<name> with --json; its result document, or TOOL_ERROR with its own error."""
+        code, out, err = self._run([self.script(name), *args, "--json"], timeout or self.timeout)
+        doc = _parse_json(out)
+        if code != 0 or doc.get("status") not in (None, "completed", "ok") or doc.get("ok") is False:
+            failure = doc.get("error") if isinstance(doc.get("error"), dict) else {}
+            tail = failure.get("message") or (err.strip().splitlines()[-1] if err.strip() else "no output")
+            raise DubbingError("TOOL_ERROR", f"ffmpeg-skill/{name} failed (exit {code}): {tail}",
+                               {"tool": f"ffmpeg-skill/{name}", "exit_code": code, "error": failure or None}, retryable=False)
+        return doc
+
+    def join(self, inputs: List[str], output: str, sample_rate: int, channels: int = 1,
+             timeout: Optional[float] = None) -> Dict[str, Any]:
+        """ffmpeg-skill/join <clips...> -o <out.wav> --transition none --sample-rate R --channels C: the clips butt-joined
+        in order into one PCM WAV (audio mode). Needs two or more clips."""
+        if len(inputs) < 2:
+            raise DubbingError("INTERNAL_ERROR", "ffmpeg-skill/join needs two or more clips")
+        args = [os.path.abspath(p) for p in inputs]
+        return self._tool("join", [*args, "-o", os.path.abspath(output), "--transition", "none", "--sample-rate", str(int(sample_rate)),
+                                   "--channels", str(int(channels))], timeout)
+
+    def pad(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """ffmpeg-skill/pad <clip> -o <out.wav> --start S --end E: silence before and after one clip. Only on a checkout
+        whose pad declares audio_only (OPTIONAL_TOOLS); the caller checks that before any work."""
+        problem = self.info().optional_problem("pad")
+        if problem:
+            raise DubbingError("FFMPEG_SKILL_UNAVAILABLE", problem, {"tool": "ffmpeg-skill/pad"})
+        return self._tool("pad", [os.path.abspath(input_path), "-o", os.path.abspath(output), "--start", f"{max(0.0, start):.3f}",
+                                  "--end", f"{max(0.0, end):.3f}"], timeout)
 
 
 def _parse_json(text: str) -> Dict[str, Any]:

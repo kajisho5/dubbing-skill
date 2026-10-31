@@ -18,8 +18,8 @@ from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill
 
 DOCTOR_SCHEMA = f"{SKILL_ID}/doctor@1"
-# op -> roadmap step that implements it; none is implemented in this release (ADR-002)
-IMPLEMENTED_OPS: Dict[str, bool] = {"narrate": False, "dub": False, "audio_description": False}
+# op -> roadmap step that implements it; NARRATE is implemented (step 2, ADR-005)
+IMPLEMENTED_OPS: Dict[str, bool] = {"narrate": True, "dub": False, "audio_description": False}
 OP_STEP = {"narrate": 2, "dub": 5, "audio_description": 7}
 TRANSLATION = {
     "status": "CALLER_SUPPLIED",
@@ -37,6 +37,7 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
     checks: Dict[str, Any] = {}
     problems: List[str] = []
     warnings: List[str] = []
+    cue_placement: Optional[str] = "ffmpeg-skill not usable"
     py_ok = sys.version_info >= (3, 9)
     checks["python"] = {"status": "OK" if py_ok else "MISSING", "version": platform.python_version(), "platform": platform.system(),
                         "install": None if py_ok else "Python >= 3.9"}
@@ -50,6 +51,9 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         problems += ["ffmpeg-skill: " + p for p in info.problems]
         warnings += ["ffmpeg-skill: " + w for w in info.warnings]
         if info.supported:
+            cue_placement = info.optional_problem("pad")
+            if cue_placement:
+                warnings.append(f"ffmpeg-skill: narrate with timed cues is refused: {cue_placement} (plain text works; ADR-005)")
             ffdoc = skill.doctor()
             for tool in ("ffmpeg", "ffprobe"):
                 found = ffdoc.get(tool)
@@ -77,6 +81,11 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         ops[op] = {"implemented": IMPLEMENTED_OPS[op], "roadmap_step": OP_STEP[op], "engine": eid, "engine_status": engine_status,
                    "alternatives": [e for e in engines_for(op) if e != eid],
                    "ready": bool(IMPLEMENTED_OPS[op] and media_ok and engine_status == OK)}
+    ops["narrate"]["inputs"] = {
+        "text": {"ready": ops["narrate"]["ready"]},
+        "cues": {"ready": bool(ops["narrate"]["ready"] and cue_placement is None),
+                 "needs": "ffmpeg-skill/pad on audio-only input (ADR-005)", "problem": cue_placement},
+    }
     checks["operations"] = ops
     missing_engines = sorted(eid for eid, e in engines.items() if e["status"] != OK)
     status = "fail" if problems else ("degraded" if missing_engines else "ok")

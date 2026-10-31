@@ -74,6 +74,26 @@ def hf_cached_file(repo_id: str, filename: str, model_dir_env: Optional[str] = N
     return None
 
 
+def hf_cached_snapshot(repo_id: str, filenames: Sequence[str], model_dir_env: Optional[str] = None) -> Tuple[Optional[Path], List[str]]:
+    """The one directory that holds every file in `filenames`: the explicit model directory (`model_dir_env`), else a
+    Hugging Face cache snapshot of `repo_id`. Returns (directory | None, the files missing from the best candidate)."""
+    explicit = os.environ.get(model_dir_env) if model_dir_env else None
+    if explicit:
+        d = Path(explicit)
+        absent = [f for f in filenames if not (d / f).is_file()]
+        return (None if absent else d), absent
+    folder = "models--" + repo_id.replace("/", "--")
+    best: List[str] = list(filenames)
+    for cache in hf_cache_dirs():
+        for snap in sorted((cache / folder / "snapshots").glob("*")):
+            absent = [f for f in filenames if not (snap / f).is_file()]
+            if not absent:
+                return snap, []
+            if len(absent) < len(best):
+                best = absent
+    return None, best
+
+
 def check_loopback_url(url: str) -> Tuple[str, int]:
     """(host, port) of an http://loopback URL; ValueError for anything else."""
     parts = urlsplit(url)

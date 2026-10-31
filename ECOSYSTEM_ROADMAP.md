@@ -13,7 +13,7 @@ Skeleton 0.1.0 ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contra
 
 | Owned job | Status | Note |
 |---|---|---|
-| AIナレーション(TTS) | missing |  |
+| AIナレーション(TTS) | experimental | NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)): text works; timed cues wait for ffmpeg-skill/pad on audio |
 | 吹替・声の置換 | missing | needs translated cues; nobody translates today |
 | 音声解説 | missing |  |
 
@@ -25,7 +25,7 @@ None. Expected: ffmpeg-skill probe, join, audio --replace / --music --duck, loud
 
 - [x] **1. Skeleton + contract/doctor + engine registry** ([#3](https://github.com/kajisho5/dubbing-skill/pull/3), [docs/decisions.md](docs/decisions.md) ADR-001 engines, ADR-002 skeleton, ADR-003 translation as a caller input; `dubbing doctor` lists chatterbox, voicevox, style_bert_vits2 and kokoro with `OK` / `MISSING` / `INCOMPATIBLE` and an install line) — EngineSpec carries licence, credit, watermark
   - Done when: doctor lists all 4 engines with install status
-- [ ] **2. NARRATE op (Chatterbox)** — text or cues -> clips -> timeline WAV
+- [x] **2. NARRATE op (Chatterbox)** ([#4](https://github.com/kajisho5/dubbing-skill/pull/4), [docs/decisions.md](docs/decisions.md) ADR-005; plain text works end to end; timed cues wait for ffmpeg-skill/pad on audio-only input and are refused cleanly until then) — text or cues -> clips -> timeline WAV
   - Done when: duration within tolerance; receipt records engine + watermark
 - [ ] **3. VOICEVOX engine** — local app over HTTP; credit in provenance
   - Done when: skips when the app is absent
