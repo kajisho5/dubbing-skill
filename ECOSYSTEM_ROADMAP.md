@@ -37,7 +37,7 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
   - Done when: security test
 - [x] **7. AUDIO_DESCRIPTION op** ([#9](https://github.com/kajisho5/dubbing-skill/pull/9), [docs/decisions.md](docs/decisions.md) ADR-010; `dubbing describe <programme> <descriptions> (--gaps | --detect-gaps)`: descriptions only inside the caller's gaps or the quiet stretches ffmpeg-skill/silence finds, each ending by its cue and its gap, ducked over the programme on DUB's renderer; placement test in `tests/test_describe.py`) — narration only inside caller-given gaps, ducked
   - Done when: placement test
-- [ ] **8. Style-Bert-VITS2 / Kokoro engines** — AGPL engine in a separate process
+- [x] **8. Style-Bert-VITS2 / Kokoro engines** ([#10](https://github.com/kajisho5/dubbing-skill/pull/10), [docs/decisions.md](docs/decisions.md) ADR-011; Style-Bert-VITS2 through the user's own API server on loopback (`POST /voice`), never imported; JVNV models with their CC BY-SA credit, any other model only with its owner's consent record; Kokoro in the worker from local files only, CC BY credit per voice; licence isolation written down and tested) — AGPL engine in a separate process
   - Done when: licence isolation documented
 - [ ] **9. SKILL.md, CI; (agent side) adapter**
   - Done when: agent plan or handoff

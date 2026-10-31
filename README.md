@@ -98,10 +98,14 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
 |---|---|---|---|---|
 | `chatterbox` Chatterbox Multilingual (default; `chatterbox-tts` 0.1.7 loads the V2 checkpoint, ADR-005) | MIT / MIT | native | Perth watermark in every clip | worker, ideally its own venv: `DUBBING_CHATTERBOX_PYTHON` |
 | `voicevox` VOICEVOX (NARRATE since step 3, ADR-006) | ENGINE LGPL-3.0, CORE MIT / per voice library terms (ずんだもん, 四国めたん verified; others refused unless acknowledged) | native | credit `VOICEVOX:<character>`, per clip | the app on loopback: `DUBBING_VOICEVOX_URL` (default `http://127.0.0.1:50021`) |
-| `style_bert_vits2` Style-Bert-VITS2 | AGPL-3.0 / per model (JP-Extra AGPL-3.0, JVNV CC BY-SA 4.0) | native | credit per model | its own API server on loopback: `DUBBING_SBV2_URL` (default `http://127.0.0.1:5000`); never imported |
-| `kokoro` Kokoro-82M | Apache-2.0 / Apache-2.0 | weak | CC BY credit for four Japanese voices | worker, ideally its own venv: `DUBBING_KOKORO_PYTHON` |
+| `style_bert_vits2` Style-Bert-VITS2 (NARRATE, DUB, AUDIO_DESCRIPTION since step 8, [ADR-011](docs/decisions.md)) | AGPL-3.0 / per model (JP-Extra AGPL-3.0, JVNV CC BY-SA 4.0) | native (JP, EN, ZH) | credit per model; JVNV models as they are, any other model only with its voice owner's consent record | its own API server on loopback: `DUBBING_SBV2_URL` (default `http://127.0.0.1:5000`); never imported |
+| `kokoro` Kokoro-82M (NARRATE, AUDIO_DESCRIPTION since step 8, [ADR-011](docs/decisions.md)) | Apache-2.0 / Apache-2.0 | weak (also en-us, en-gb, es, fr, hi, it, pt-br, zh) | CC BY 3.0 credit for four Japanese voices, per clip | worker, ideally its own venv: `DUBBING_KOKORO_PYTHON` |
 
-Weights are fetched once by you into the Hugging Face cache, or into `DUBBING_CHATTERBOX_MODEL_DIR` / `DUBBING_KOKORO_MODEL_DIR`. `doctor` prints the exact install line for each engine. Chatterbox's Japanese text path depends on pykakasi (GPL-3.0-or-later), which is why it belongs in its own virtual environment rather than this package's.
+Weights are fetched once by you into the Hugging Face cache, or into `DUBBING_CHATTERBOX_MODEL_DIR` / `DUBBING_KOKORO_MODEL_DIR` (Kokoro: `config.json`, `kokoro-v1_0.pth` and `voices/<voice>.pt`). `doctor` prints the exact install line for each engine. Chatterbox's Japanese text path depends on pykakasi (GPL-3.0-or-later), which is why it belongs in its own virtual environment rather than this package's.
+
+- **Style-Bert-VITS2.** `--engine style_bert_vits2 --voice MODEL[:SPEAKER[:STYLE]]`. The skill sends `POST /voice` to your own API server (`python server_fastapi.py`) on loopback; the AGPL code never enters this package. The published JVNV models are used as they are, with their CC BY-SA 4.0 credit. Any other model may be a real person's voice, so it needs `--reference <its .safetensors>` and that person's consent record.
+- **Kokoro.** `--engine kokoro --voice jf_alpha` (the default for Japanese). It runs in the worker from local files only, with no download. Its Japanese is weak.
+- **Licences and languages, with sources:** [ADR-001](docs/decisions.md) and [ADR-011](docs/decisions.md) ([Style-Bert-VITS2](https://github.com/litagin02/Style-Bert-VITS2), [JVNV models](https://huggingface.co/litagin/style_bert_vits2_jvnv), [Kokoro](https://github.com/hexgrad/kokoro), [Kokoro-82M VOICES.md](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md)).
 
 Cloning a real person's voice needs a recorded consent from that person (below). Credits and watermarks go into the provenance of every clip.
 
@@ -146,7 +150,8 @@ python -m unittest discover -s tests -v
 Unit tests need no engine, no weights, no FFmpeg and no network:
 
 - Package lookups are mocked, and the Hugging Face cache is a temporary directory.
-- VOICEVOX and Style-Bert-VITS2 are replaced by fake apps on loopback. The fake VOICEVOX answers `/version`, `/speakers`, `/audio_query` and `/synthesis` in the shapes of voicevox_engine 0.26.0, and refuses any other request shape.
+- VOICEVOX and Style-Bert-VITS2 are replaced by fake apps on loopback. The fake Style-Bert-VITS2 refuses any `/voice` request that `server_fastapi.py` would not take.
+- Kokoro runs through the real worker on a fake `kokoro` package that loads local files only. The fake VOICEVOX answers `/version`, `/speakers`, `/audio_query` and `/synthesis` in the shapes of voicevox_engine 0.26.0, and refuses any other request shape.
 - NARRATE runs the real worker on a fake `chatterbox` package that makes tones or silence of a known length.
 - The consent gate is tested as a security boundary: every way a record can fail, the record checked before the clip is read and again in the worker, and no option that skips it.
 - AUDIO_DESCRIPTION has a placement test: every description inside its gap and its cue, and the programme untouched sample for sample elsewhere.

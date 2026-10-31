@@ -641,3 +641,220 @@ def make_consent(directory: str, clip: str, name: str = "consent.json", **overri
     path = os.path.join(directory, name)
     Path(path).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+# The fake Kokoro (roadmap step 8, ADR-011): a `kokoro` package with KModel and KPipeline in the shapes of hexgrad/kokoro
+# 0.9.4 (model.py, pipeline.py), stub `misaki`, `pyopenjtalk` and `fugashi`, the stub `torch` above and a kokoro-0.9.4
+# dist-info, so the engine's checks find it and the worker loads it as it would the real one. A line lasts
+# KOKORO_BASE + KOKORO_PER_CHAR * len(text) seconds at 24 kHz, yielded in two chunks. Calls go to calls.json.
+KOKORO_BASE, KOKORO_PER_CHAR, KOKORO_RATE = 0.25, 0.05, 24000
+FAKE_KOKORO = r'''
+import json, math, os
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _record(entry):
+    path = os.path.join(HERE, "calls.json")
+    calls = json.load(open(path)) if os.path.exists(path) else []
+    calls.append(entry)
+    json.dump(calls, open(path, "w"))
+
+
+class _Tensor:
+    def __init__(self, samples):
+        self.samples = samples
+    def detach(self):
+        return self
+    def cpu(self):
+        return self
+    def tolist(self):
+        return list(self.samples)
+
+
+class KModel:
+    def __init__(self, repo_id=None, config=None, model=None, disable_complex=False):
+        for p in (config, model):
+            if not (isinstance(p, str) and os.path.isfile(p)):
+                raise RuntimeError("the fake KModel only loads local files, got %r" % (p,))
+        _record({"call": "KModel", "repo_id": repo_id, "config": os.path.basename(config), "model": os.path.basename(model)})
+    def to(self, device):
+        self.device = device
+        return self
+    def eval(self):
+        return self
+
+
+class _Result:
+    def __init__(self, audio):
+        self.audio = audio
+
+
+class KPipeline:
+    def __init__(self, lang_code, repo_id=None, model=True, trf=False, en_callable=None, device=None):
+        self.lang_code = lang_code
+        _record({"call": "KPipeline", "lang_code": lang_code, "repo_id": repo_id, "model": type(model).__name__})
+    def __call__(self, text, voice=None, speed=1, split_pattern=r"\n+", model=None):
+        _record({"call": "generate", "text": text, "voice": voice, "speed": speed, "split_pattern": split_pattern,
+                 "lang_code": self.lang_code})
+        if not (isinstance(voice, str) and voice.endswith(".pt") and os.path.isfile(voice)):
+            raise RuntimeError("the fake pipeline needs a local voice file, got %r" % (voice,))
+        n = int(round((__BASE__ + __PER_CHAR__ * len(text)) / speed * __RATE__))
+        wave = [0.2 * math.sin(2 * math.pi * 180.0 * i / __RATE__) for i in range(n)]
+        half = n // 2
+        yield _Result(_Tensor(wave[:half]))
+        yield _Result(_Tensor(wave[half:]))
+'''
+
+
+def kokoro_line_seconds(text: str) -> float:
+    return KOKORO_BASE + KOKORO_PER_CHAR * len(text)
+
+
+def fake_kokoro(directory: str, version: str = "0.9.4", ja: bool = True) -> str:
+    root = os.path.join(directory, "fake_kokoro_site")
+    pkg = os.path.join(root, "kokoro")
+    os.makedirs(pkg, exist_ok=True)
+    Path(pkg, "__init__.py").write_text(FAKE_KOKORO.replace("__RATE__", str(KOKORO_RATE)).replace("__BASE__", repr(KOKORO_BASE))
+                                        .replace("__PER_CHAR__", repr(KOKORO_PER_CHAR)), encoding="utf-8")
+    Path(root, "torch.py").write_text(FAKE_TORCH, encoding="utf-8")
+    for mod in (("misaki", "pyopenjtalk", "fugashi") if ja else ()):
+        Path(root, f"{mod}.py").write_text("", encoding="utf-8")
+    dist = os.path.join(root, f"kokoro-{version}.dist-info")
+    os.makedirs(dist, exist_ok=True)
+    Path(dist, "METADATA").write_text(f"Metadata-Version: 2.1\nName: kokoro\nVersion: {version}\n", encoding="utf-8")
+    return root
+
+
+def fake_kokoro_weights(cache: str, voices: Tuple[str, ...] = ("jf_alpha", "jf_gongitsune", "af_heart")) -> str:
+    from dubbing_skill.engines.kokoro import HF_REPO, MODEL_FILES
+    for name in MODEL_FILES:
+        path = fake_hf_file(cache, HF_REPO, name)
+    snap = os.path.dirname(path)
+    os.makedirs(os.path.join(snap, "voices"), exist_ok=True)
+    for v in voices:
+        Path(snap, "voices", f"{v}.pt").write_bytes(b"voice")
+    return snap
+
+
+@contextmanager
+def kokoro_ready(tmp: str, **fake: Any) -> Iterator[str]:
+    """The fake Kokoro installed and its weights cached, every other engine unreachable. Yields the fake site."""
+    cache = os.path.join(tmp, "hf")
+    os.makedirs(cache, exist_ok=True)
+    fake_kokoro_weights(cache)
+    site = fake_kokoro(tmp, **fake)
+    import importlib
+    with env(**no_engines_env(cache)), on_python_path(site):
+        try:
+            yield site
+        finally:
+            for name in [m for m in sys.modules if m.split(".")[0] in ("kokoro", "misaki", "pyopenjtalk", "fugashi")]:
+                del sys.modules[name]
+            importlib.invalidate_caches()
+
+
+# The fake Style-Bert-VITS2 API server (roadmap step 8, ADR-011), in the shapes of litagin02/Style-Bert-VITS2 master
+# server_fastapi.py: GET /models/info, GET /openapi.json, and POST /voice with every parameter as a query parameter and no
+# body, answering a mono WAV (scipy wavfile, 44.1 kHz) of SBV2_BASE + SBV2_PER_CHAR * len(text) seconds. A request
+# with another shape is refused with 422, as FastAPI does. Calls are recorded in `.calls`. Modes: ok, notwav, stereo.
+SBV2_RATE, SBV2_BASE, SBV2_PER_CHAR = 44100, 0.2, 0.05
+SBV2_MODELS = {
+    "0": {"config_path": "model_assets/jvnv-F1-jp/config.json", "model_path": "model_assets/jvnv-F1-jp/jvnv-F1-jp_e160_s14000.safetensors",
+          "device": "cpu", "spk2id": {"jvnv-F1-jp": 0}, "id2spk": {"0": "jvnv-F1-jp"},
+          "style2id": {"Neutral": 0, "Happy": 1, "Sad": 2}},
+    "1": {"config_path": "model_assets\\hanako\\config.json", "model_path": "model_assets\\hanako\\hanako_e100_s5000.safetensors",
+          "device": "cpu", "spk2id": {"hanako": 0}, "id2spk": {"0": "hanako"}, "style2id": {"Neutral": 0}},
+}
+
+
+def sbv2_line_seconds(text: str) -> float:
+    return SBV2_BASE + SBV2_PER_CHAR * len(text)
+
+
+class FakeSbv2:
+    def __init__(self, models: Optional[Dict[str, Any]] = None, mode: str = "ok") -> None:
+        self.models = SBV2_MODELS if models is None else models
+        self.mode = mode
+        self.calls: List[Dict[str, Any]] = []
+        self.url = ""
+
+    def wav(self, text: str) -> bytes:
+        import math
+        import struct
+        import wave
+        n = int(round(sbv2_line_seconds(text) * SBV2_RATE))
+        channels = 2 if self.mode == "stereo" else 1
+        frames = b"".join(struct.pack("<h", int(5000 * math.sin(2 * math.pi * 260.0 * i / SBV2_RATE))) * channels for i in range(n))
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)
+            w.setframerate(SBV2_RATE)
+            w.writeframes(frames)
+        return buf.getvalue()
+
+
+@contextmanager
+def fake_sbv2(**kw: Any) -> Iterator[FakeSbv2]:
+    from http.server import ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlsplit
+    fake = FakeSbv2(**kw)
+    allowed = {"text", "encoding", "model_name", "model_id", "speaker_name", "speaker_id", "sdp_ratio", "noise", "noisew",
+               "length", "language", "auto_split", "split_interval", "assist_text", "assist_text_weight", "style",
+               "style_weight", "reference_audio_path"}
+
+    class Handler(BaseHTTPRequestHandler):
+        def reply(self, status: int, body: Any, ctype: str = "application/json") -> None:
+            data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def handle_any(self, method: str) -> None:
+            parts = urlsplit(self.path)
+            q = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parts.query, keep_blank_values=True).items()}
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            fake.calls.append({"method": method, "path": parts.path, "query": q, "body": body})
+            if (method, parts.path) == ("GET", "/models/info"):
+                return self.reply(200, fake.models)
+            if (method, parts.path) == ("GET", "/openapi.json"):
+                return self.reply(200, {"openapi": "3.1.0", "info": {"title": "FastAPI", "version": "0.1.0"}})
+            if parts.path != "/voice" or method not in ("GET", "POST"):
+                return self.reply(404, {"detail": "Not Found"})
+            if set(q) - allowed or not isinstance(q.get("text"), str) or not q["text"] or body:
+                return self.reply(422, {"detail": "query parameters only, text required"})
+            names = {m["model_path"].replace("\\", "/").split("/")[-2]: m for m in fake.models.values()}
+            model = names.get(q.get("model_name"))
+            if model is None:
+                return self.reply(422, {"detail": [{"loc": ["query", "model_name"], "msg": "not found"}]})
+            if q.get("speaker_name") not in model["spk2id"] or q.get("style", "Neutral") not in model["style2id"]:
+                return self.reply(422, {"detail": "speaker or style not found"})
+            if q.get("language") not in ("JP", "EN", "ZH") or q.get("auto_split") not in ("false", "False"):
+                return self.reply(422, {"detail": "language JP|EN|ZH and auto_split false expected"})
+            if fake.mode == "notwav":
+                return self.reply(200, {"not": "a wav"})
+            return self.reply(200, fake.wav(q["text"]), "audio/wav")
+
+        def do_GET(self) -> None:  # noqa: N802 - http.server API
+            self.handle_any("GET")
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            self.handle_any("POST")
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    fake.url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with env(DUBBING_SBV2_URL=fake.url):
+            yield fake
+    finally:
+        server.shutdown()
+        server.server_close()

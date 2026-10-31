@@ -201,7 +201,7 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         if problem:
             raise DubbingError("FFMPEG_SKILL_UNAVAILABLE", f"--detect-gaps needs ffmpeg-skill/silence: {problem}; pass --gaps instead",
                                {"tool": "ffmpeg-skill/silence", "problem": problem, "ffmpeg_skill_version": info.version})
-    if reference:
+    if reference and engine.spec.reference_kind == "audio":
         check_reference(skill, reference)
     in_facts = probe_programme(skill, src, kind, req.audio_stream, script)
     programme_end = float(in_facts["duration"])
