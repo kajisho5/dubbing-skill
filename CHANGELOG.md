@@ -2,6 +2,10 @@
 
 ## 0.1.0 - unreleased
 
+ffmpeg-skill 3.0.0 (ADR-013).
+
+- ffmpeg-skill 3.x declares `contract_version` 2.0; it is read like 1.0, with no warning. Every tool and flag this skill uses is unchanged. Its `cut` calls always pass `--accurate`, so 3.0's new `cut.py` defaults do not reach it. 3.0.0 still has no audio-only tempo change and no audio-only `pad`, so the timed-cue and tempo limits stand. The CI integration job also runs against 3.0.0, pinned by commit.
+
 SKILL.md, CI and the agent handoff (roadmap step 9, ADR-012).
 
 - `SKILL.md`: workflow, request → command, consent, report format, pitfalls and boundaries. `tests/test_skill_md.py` keeps it true to the CLI (commands, flags, error codes, the consent rule).
