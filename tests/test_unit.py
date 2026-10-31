@@ -71,11 +71,11 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(set(p), {"id", "lifecycle", "tool_id"})
             self.assertIn(p["tool_id"], tool_ids)
         # an op moves from PROPOSED to EXPERIMENTAL in the PR that implements it (ADR-002): NARRATE in step 2 (ADR-005),
-        # DUB in step 5 (ADR-008)
+        # DUB in step 5 (ADR-008), AUDIO_DESCRIPTION in step 7 (ADR-010)
         self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]},
-                         {"speech.narrate": "EXPERIMENTAL", "speech.dub": "EXPERIMENTAL", "speech.audio_description": "PROPOSED"})
+                         {"speech.narrate": "EXPERIMENTAL", "speech.dub": "EXPERIMENTAL", "speech.audio_description": "EXPERIMENTAL"})
         self.assertEqual([t["tool_id"] for t in c["tools"] if t["role"] == "transformation" and t["implemented"]],
-                         ["dubbing/narrate", "dubbing/dub"])
+                         ["dubbing/narrate", "dubbing/dub", "dubbing/audio-description"])
         for d in c["dependencies"]:
             self.assertIsInstance(d["version_range"], str)
             self.assertFalse(d["version_range"].replace(".", "").isdigit(), d)

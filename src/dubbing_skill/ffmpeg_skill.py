@@ -24,6 +24,8 @@ path that needs it is refused with FFMPEG_SKILL_UNAVAILABLE before any work, and
   pad       --start / --end silence around a clip, to place it at its cue time on the timeline (NARRATE with cues).
             ffmpeg-skill 2.23.0's pad needs a video stream ("input has no video stream") and declares
             audio_only: false, so timed cues are refused today (ADR-005)
+  silence   --list --threshold --min-silence: the programme's silent stretches, without writing anything; the gaps
+            AUDIO_DESCRIPTION --detect-gaps places descriptions in (ADR-010). Declared audio_only by ffmpeg-skill 2.24.0
 """
 from __future__ import annotations
 
@@ -50,8 +52,10 @@ FLAGS_USED: Dict[str, Tuple[str, ...]] = {
 AUDIO_ONLY_TOOLS = ("probe", "join", "audio", "loudness", "cut")
 OPTIONAL_TOOLS: Dict[str, Tuple[str, ...]] = {
     "pad": ("input", "output", "start", "end", "json"),
+    "silence": ("input", "list", "threshold", "min_silence", "json"),
 }
-OPTIONAL_USE = {"pad": "silence before / after a clip, to place timed cues on the NARRATE timeline (ADR-005)"}
+OPTIONAL_USE = {"pad": "silence before / after a clip, to place timed cues on the NARRATE timeline (ADR-005)",
+                "silence": "the programme's quiet stretches, as the gaps for AUDIO_DESCRIPTION --detect-gaps (ADR-010)"}
 
 
 @dataclass
@@ -238,6 +242,20 @@ class FfmpegSkill:
         """ffmpeg-skill/audio <video> --replace <audio.wav> -o <out>: the video stream-copied with `audio` as its sound,
         padded or trimmed to the video's length."""
         return self._tool("audio", [os.path.abspath(video), "--replace", os.path.abspath(audio), "-o", os.path.abspath(output)], timeout)
+
+    def silences(self, input_path: str, threshold_db: float, min_silence: float, timeout: Optional[float] = None) -> List[List[float]]:
+        """ffmpeg-skill/silence <input> --list --threshold T --min-silence M: the silent stretches [[start, end], ...] in
+        seconds. Nothing is written. Only on a checkout whose silence declares audio_only with these flags."""
+        problem = self.info().optional_problem("silence")
+        if problem:
+            raise DubbingError("FFMPEG_SKILL_UNAVAILABLE", problem, {"tool": "ffmpeg-skill/silence"})
+        doc = self._tool("silence", [os.path.abspath(input_path), "--list", f"--threshold={threshold_db:.1f}",
+                                     f"--min-silence={min_silence:.3f}"], timeout)
+        spans = doc.get("silences")
+        if not isinstance(spans, list) or not all(isinstance(x, (list, tuple)) and len(x) == 2 for x in spans):
+            raise DubbingError("TOOL_ERROR", "ffmpeg-skill/silence --list returned no silences list", {"tool": "ffmpeg-skill/silence"},
+                               retryable=False)
+        return [[float(a), float(b)] for a, b in spans]
 
     def pad(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
         """ffmpeg-skill/pad <clip> -o <out.wav> --start S --end E: silence before and after one clip. Only on a checkout

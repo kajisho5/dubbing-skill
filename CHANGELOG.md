@@ -2,6 +2,16 @@
 
 ## 0.1.0 - unreleased
 
+AUDIO_DESCRIPTION (roadmap step 7, ADR-010).
+
+- `dubbing describe <programme> <descriptions> --lang L -o <out> (--gaps gaps.json | --detect-gaps)` (tool `dubbing/audio-description`, schema `dubbing/describe@1`). `speech.audio_description` is `EXPERIMENTAL`.
+- Descriptions are spoken only inside gaps: the caller's, or the programme's quiet stretches found by ffmpeg-skill/silence `--list` (an optional tool; `--silence-threshold`, `--min-gap`).
+  - Each description is spoken from its cue's start and must end by its cue's end and its gap's end.
+  - A description starting outside every gap is refused before the engine runs. One that is too long fails with `TIMING_OVERFLOW`, or is left out with `--on-unfit skip`.
+- The mix is DUB's renderer: the programme is ducked under each description and untouched elsewhere, then put back into the video with audio and picture checked to match.
+- Engines: Chatterbox, VOICEVOX (credit per character), Kokoro and Style-Bert-VITS2 (step 8). A reference voice needs its consent record.
+- Tests: 13 new (`tests/test_describe.py`, including the placement test) and 2 integration tests on a real video with a silent stretch.
+
 Consent gate for voice cloning (roadmap step 6, ADR-009).
 
 - A reference voice is used only with a consent record (`dubbing/consent@1`).

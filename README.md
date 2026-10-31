@@ -18,13 +18,13 @@
 
 AI narration (TTS), voice replacement (dubbing) and audio description, timed to the picture, for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Every media step (probe, assembling clips, putting the voice into the video, loudness) goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.1.0, NARRATE and DUB experimental.** `contract`, `doctor`, `engines`, `narrate`, `dub` ([ADR-008](docs/decisions.md)) and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). AUDIO_DESCRIPTION is declared (`PROPOSED`) and arrives in [roadmap](ECOSYSTEM_ROADMAP.md) step 7.
+**Status: 0.1.0, all three ops experimental.** `contract`, `doctor`, `engines`, `narrate`, `dub` ([ADR-008](docs/decisions.md)), `describe` ([ADR-010](docs/decisions.md)) and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). A reference voice needs its owner's consent record ([ADR-009](docs/decisions.md)). See the [roadmap](ECOSYSTEM_ROADMAP.md).
 
 | Op | Capability | Default engine | Lifecycle | Step |
 |---|---|---|---|---|
 | NARRATE | `speech.narrate` | Chatterbox Multilingual | `EXPERIMENTAL` | 2 ([ADR-005](docs/decisions.md)) |
 | DUB | `speech.dub` | Chatterbox Multilingual | `EXPERIMENTAL` | 5 ([ADR-008](docs/decisions.md)) |
-| AUDIO_DESCRIPTION | `speech.audio_description` | Chatterbox Multilingual | `PROPOSED` | 7 |
+| AUDIO_DESCRIPTION | `speech.audio_description` | Chatterbox Multilingual | `EXPERIMENTAL` | 7 ([ADR-010](docs/decisions.md)) |
 
 **Translation is not done here.** Every op takes cues whose text is already in the target language. The caller supplies them, and no translation engine is chosen ([ADR-003](docs/decisions.md)).
 
@@ -36,6 +36,7 @@ dubbing contract --json              # machine-readable contract (alias: skill -
 dubbing narrate script.txt --lang ja -o narration.wav --json   # text or cues -> one clip per line -> timeline WAV
 dubbing narrate script.txt --lang ja -o narration.wav --engine voicevox --json   # the VOICEVOX app on 127.0.0.1:50021
 dubbing dub talk.mp4 en.srt --lang en -o talk.en.mp4 --source-cues ja.srt --json   # dialogue replaced, ducked over the programme
+dubbing describe talk.mp4 desc.json --lang ja -o talk.ad.mp4 --detect-gaps --json   # audio description inside the quiet stretches
 dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and silence each line needs; lines that cannot fit
 ```
 
@@ -67,6 +68,15 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
 - **Mix.** The programme audio is cut at every line's start and end (ffmpeg-skill/cut, sample-exact). Under each line it is lowered by `--duck` dB (default 12) and the line is added at `--voice-gain` dB (default 0) (ffmpeg-skill/audio `--music`). Everywhere else it is untouched. The pieces are joined back (ffmpeg-skill/join) and replace the video's audio (ffmpeg-skill/audio `--replace`). No silence is made.
 - **Validation.** The output must last as long as the programme, and its audio as long as its picture, within max(0.1 s, 1 %) (`output.av_delta`).
 - **Receipt.** A provenance block per clip and for the output, the fit plan, every piece of the mix, `kept_original`, and `obligations` (credits, watermark).
+
+## AUDIO_DESCRIPTION
+
+`dubbing describe <programme> <descriptions> --lang <lang> -o <out> (--gaps gaps.json | --detect-gaps)` speaks descriptions of the picture only where nobody speaks. Details are in [ADR-010](docs/decisions.md).
+
+- **Gaps.** Either the caller's (`--gaps`: `[{"start", "end"}]`, for example from transcription-skill's segments) or the programme's quiet stretches, found by ffmpeg-skill/silence (`--detect-gaps`, `--silence-threshold` dBFS, default -35, and `--min-gap` seconds, default 1).
+- **Placement.** Each description is spoken from its cue's start and must end by its cue's end and by its gap's end. A description that starts outside every gap is refused before the engine runs. One too long for its window fails with `TIMING_OVERFLOW`, or is left out with `--on-unfit skip`.
+- **Mix.** It is the same as DUB: the programme is lowered by `--duck` dB under each description and untouched elsewhere. The output is a video or the programme audio, and its audio and picture are checked to last as long as each other.
+- **Engines.** Chatterbox (default), VOICEVOX (credit per character), Kokoro and Style-Bert-VITS2.
 
 ## Timing fit
 
@@ -121,7 +131,7 @@ A reference voice is used only with a consent record (`dubbing/consent@1` JSON) 
 
 ## ffmpeg-skill
 
-The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `DUBBING_FFMPEG_SKILL_DIR`, `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. Compatibility is checked tool by tool and flag by flag against its contract, not by version number. The tools and flags it needs: `probe`; `join --transition --sample-rate --channels`; `audio --replace --music --music-volume --gain --duck --audio-stream --overwrite`; `loudness --lufs --measure-only`; `cut --start --end --accurate`. Optional: `pad --start --end` on audio-only input (declared `audio_only`), for timed cues.
+The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `DUBBING_FFMPEG_SKILL_DIR`, `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. Compatibility is checked tool by tool and flag by flag against its contract, not by version number. The tools and flags it needs: `probe`; `join --transition --sample-rate --channels`; `audio --replace --music --music-volume --gain --duck --audio-stream --overwrite`; `loudness --lufs --measure-only`; `cut --start --end --accurate`. Optional: `pad --start --end` on audio-only input (declared `audio_only`), for timed cues; `silence --list --threshold --min-silence`, for `describe --detect-gaps`.
 
 ## JSON and errors
 
@@ -139,6 +149,7 @@ Unit tests need no engine, no weights, no FFmpeg and no network:
 - VOICEVOX and Style-Bert-VITS2 are replaced by fake apps on loopback. The fake VOICEVOX answers `/version`, `/speakers`, `/audio_query` and `/synthesis` in the shapes of voicevox_engine 0.26.0, and refuses any other request shape.
 - NARRATE runs the real worker on a fake `chatterbox` package that makes tones or silence of a known length.
 - The consent gate is tested as a security boundary: every way a record can fail, the record checked before the clip is read and again in the worker, and no option that skips it.
+- AUDIO_DESCRIPTION has a placement test: every description inside its gap and its cue, and the programme untouched sample for sample elsewhere.
 - DUB runs on a WAV programme with WaveSkill: the programme is checked sample for sample between lines, and under each line it must be the programme lowered by `--duck` plus the line.
 - Timing fit is tested as pure decisions (exact fit, speed-up, over the limit, padding, empty and zero-length slots, 2000 lines) and on WAVs with non-ASCII names.
 - A WAV-only stand-in replaces ffmpeg-skill.

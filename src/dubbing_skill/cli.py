@@ -15,12 +15,14 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
                               dialogue replaced by translated speech (ADR-008): one clip per translated cue, fitted to its
                               source segment, spoken over the programme's own sound (ducked) and put back into the video,
                               all through ffmpeg-skill; lines that cannot fit fail (TIMING_OVERFLOW) or keep the original
+  dubbing describe <video> <descriptions> --lang ja -o <out.mp4> (--gaps gaps.json | --detect-gaps) --json
+                              audio description (ADR-010): each description spoken from its cue's start, only inside a gap
+                              (the caller's, or a quiet stretch found by ffmpeg-skill/silence), over the ducked programme
   dubbing fit <cues> <clip>... --json
                               timing fit (ADR-007): one clip per cue measured through ffmpeg-skill/probe against its cue
                               window; the tempo each needs (at most --max-tempo), the silence around it, and every line
                               that cannot fit (TIMING_OVERFLOW, or listed with --on-unfit report). Writes no media
 
-describe is declared PROPOSED and arrives in roadmap step 7.
 Translation is not an op: the caller passes text that is already translated (ADR-003)."""
 from __future__ import annotations
 
@@ -31,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 from . import PACKAGE_NAME, SKILL_ID, __version__
 from .contract import contract
+from .describe import (DEFAULT_MIN_GAP, DEFAULT_SILENCE_THRESHOLD, UNFIT_POLICIES as DESCRIBE_UNFIT_POLICIES, DescribeRequest,
+                       describe)
 from .dub import UNFIT_POLICIES as DUB_UNFIT_POLICIES, DubRequest, dub
 from .doctor import doctor, engines_report
 from .errors import DubbingError
@@ -110,6 +114,36 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     b.add_argument("--offline", action="store_true")
     b.add_argument("--json", action="store_true")
+    a = sub.add_parser("describe", help="audio description: descriptions spoken only inside the programme's gaps, ducked")
+    a.add_argument("input", help="the programme: a video, or an audio file with a .wav output")
+    a.add_argument("descriptions", help="description cues (.json, .srt, .vtt), already in --lang; each spoken from its start")
+    a.add_argument("-o", "--output", required=True, help="a video (.mp4, .mov, .mkv) or the programme audio alone (.wav)")
+    a.add_argument("--lang", required=True, help="the language the descriptions are in")
+    a.add_argument("--gaps", help="the gaps descriptions may go in: JSON [{start, end}] or {gaps: [...]}")
+    a.add_argument("--detect-gaps", action="store_true", help="find the gaps: the programme's quiet stretches (ffmpeg-skill/silence)")
+    a.add_argument("--min-gap", type=float, default=DEFAULT_MIN_GAP,
+                   help=f"--detect-gaps: the shortest quiet stretch that counts as a gap, in seconds (default {DEFAULT_MIN_GAP:g})")
+    a.add_argument("--silence-threshold", type=float, default=DEFAULT_SILENCE_THRESHOLD,
+                   help=f"--detect-gaps: the level in dBFS below which the programme is quiet (default {DEFAULT_SILENCE_THRESHOLD:g})")
+    a.add_argument("--engine", help="engine id (default: chatterbox; also voicevox, kokoro, style_bert_vits2)")
+    a.add_argument("--voice", help="engine voice (voicevox: a style id)")
+    a.add_argument("--accept-unverified-voice-terms", action="store_true",
+                   help="use a VOICEVOX character whose terms this skill has not verified (ADR-006)")
+    a.add_argument("--reference", help="a reference voice (voice cloning): needs --consent")
+    a.add_argument("--consent", help="the consent record (dubbing/consent@1) of the person whose voice --reference is (ADR-009)")
+    a.add_argument("--audio-stream", type=int, default=0, help="the programme's audio stream, 0-based (default 0)")
+    a.add_argument("--on-unfit", choices=DESCRIBE_UNFIT_POLICIES, default="fail",
+                   help="a description longer than its window: fail (default, TIMING_OVERFLOW) or skip it")
+    a.add_argument("--duck", type=float, default=DEFAULT_DUCK_DB,
+                   help=f"dB the programme is lowered by while a description is spoken (0 to 40, default {DEFAULT_DUCK_DB:g})")
+    a.add_argument("--voice-gain", type=float, default=DEFAULT_VOICE_GAIN_DB, help="dB added to the descriptions in the mix")
+    a.add_argument("--translation-note", help="JSON object describing who wrote or translated the descriptions")
+    a.add_argument("--seed", type=int, default=0, help="sampling seed, recorded (default 0)")
+    a.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"time limit in seconds (default {DEFAULT_TIMEOUT:g})")
+    a.add_argument("--overwrite", action="store_true", help="replace an existing output")
+    a.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    a.add_argument("--offline", action="store_true")
+    a.add_argument("--json", action="store_true")
     f = sub.add_parser("fit", help="timing fit: measure one clip per cue against its window; tempo, silence, lines that cannot fit")
     f.add_argument("cues", help="cues (.json, .srt, .vtt): the windows to fit into")
     f.add_argument("clips", nargs="+", help="one audio clip per cue, in cue order (measured through ffmpeg-skill/probe)")
@@ -194,6 +228,14 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  credit: {c}")
         for w in doc["warnings"]:
             print(f"  warning: {w}")
+    elif doc.get("op") == "audio_description":
+        out = doc["output"]
+        print(f"{out['path']}: {out['duration']}s ({out['kind']}), {len(doc['clips'])} description(s) in {len(doc['gaps']['spans'])} "
+              f"gap(s) ({doc['gaps']['source']}), {len(doc['skipped'])} skipped, engine {doc['engine']['id']}")
+        for c in doc["obligations"]["credit"]:
+            print(f"  credit: {c}")
+        for w in doc["warnings"]:
+            print(f"  warning: {w}")
     elif doc.get("op") == "fit":
         sm = doc["summary"]
         print(f"{doc['input']['cues']}: {sm['lines']} line(s): {sm['fit']} fit, {sm['tempo']} sped up "
@@ -258,6 +300,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  audio_stream=args.audio_stream, max_overrun=args.max_overrun, on_unfit=args.on_unfit,
                                  duck=args.duck, voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
                                  ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
+            return 0
+        if args.cmd == "describe":
+            _emit(describe(DescribeRequest(input_path=args.input, descriptions_path=args.descriptions, output_path=args.output,
+                                           lang=args.lang, gaps_path=args.gaps, detect_gaps=args.detect_gaps, min_gap=args.min_gap,
+                                           silence_threshold=args.silence_threshold, engine=args.engine, voice=args.voice,
+                                           reference_path=args.reference, consent_path=args.consent,
+                                           accept_unverified_terms=args.accept_unverified_voice_terms,
+                                           translation_note=_note(args.translation_note), seed=args.seed,
+                                           audio_stream=args.audio_stream, on_unfit=args.on_unfit, duck=args.duck,
+                                           voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
+                                           ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
             return 0
         if args.cmd == "fit":
             _emit(fit(FitRequest(cues_path=args.cues, clip_paths=list(args.clips), lang=args.lang, max_tempo=args.max_tempo,

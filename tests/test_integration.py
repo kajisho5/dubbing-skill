@@ -22,6 +22,7 @@ from pathlib import Path
 from helpers import (FAKE_RATE, FFMPEG_SKILL_DIR, chatterbox_ready, env, fake_chatterbox_calls, fake_line_seconds, make_consent,
                      no_engines_env, run_cli, write_tone_wav)
 
+from dubbing_skill.describe import DescribeRequest, describe
 from dubbing_skill.doctor import doctor
 from dubbing_skill.dub import DubRequest, dub
 from dubbing_skill.engines import get_engine, voicevox
@@ -152,14 +153,64 @@ class NarrateIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(doc["output"]["duration"], fake_line_seconds("Hello there.") + fake_line_seconds("Second line."), delta=0.05)
 
 
-def make_programme(path: str, seconds: float = 6.0) -> str:
-    """A test fixture (not part of the skill): an H.264 + AAC stereo 48 kHz video with a 300 Hz tone, made with FFmpeg's
-    own test sources. The skill itself never runs ffmpeg; the fixture is only made here, in the test."""
+def make_programme(path: str, seconds: float = 6.0, quiet: tuple = ()) -> str:
+    """A test fixture (not part of the skill): an H.264 + AAC stereo 48 kHz video with a 300 Hz tone, silent during the
+    `quiet` (start, end) spans, made with FFmpeg's own test sources. The skill itself never runs ffmpeg; the fixture is
+    only made here, in the test."""
+    mute = ["-af", ",".join(f"volume=enable='between(t,{a},{b})':volume=0" for a, b in quiet)] if quiet else []
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
                     f"testsrc=size=320x240:rate=25:duration={seconds}", "-f", "lavfi", "-i",
-                    f"sine=frequency=300:duration={seconds}:sample_rate=48000", "-ac", "2", "-c:v", "libx264", "-pix_fmt",
+                    f"sine=frequency=300:duration={seconds}:sample_rate=48000", *mute, "-ac", "2", "-c:v", "libx264", "-pix_fmt",
                     "yuv420p", "-c:a", "aac", "-shortest", path], check=True, timeout=120)
     return path
+
+
+@unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
+class DescribeIntegrationTests(unittest.TestCase):
+    """AUDIO_DESCRIPTION through the real ffmpeg-skill: gaps found by its silence tool on a real video, descriptions
+    placed inside them, audio and picture matching."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.video = make_programme(os.path.join(self.tmp.name, "talk.mp4"), seconds=8.0, quiet=((2.0, 4.5),))
+        self.desc = _write(os.path.join(self.tmp.name, "desc.json"), json.dumps(
+            [{"start": 2.6, "end": 4.4, "text": "A man walks in."}], ensure_ascii=False))
+        self.skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+
+    def test_detected_gap_placement_and_av_match(self):
+        out = os.path.join(self.tmp.name, "described.mp4")
+        with chatterbox_ready(self.tmp.name):
+            doc = describe(DescribeRequest(input_path=self.video, descriptions_path=self.desc, output_path=out, lang="en",
+                                           detect_gaps=True), skill=self.skill)
+        self.assertEqual(doc["gaps"]["source"], "ffmpeg-skill/silence")
+        gap = doc["clips"][0]["gap"]
+        self.assertLessEqual(gap["start"], 2.6)
+        self.assertGreaterEqual(gap["end"], doc["clips"][0]["end"])
+        self.assertAlmostEqual(gap["start"], 2.0, delta=0.1)
+        self.assertAlmostEqual(gap["end"], 4.5, delta=0.1)
+        facts = self.skill.probe(out)
+        self.assertLessEqual(abs(float(facts["audio"]["duration"]) - float(facts["video"]["duration"])), 0.1, facts)
+        self.assertLessEqual(abs(doc["output"]["av_delta"]), doc["output"]["tolerance"])
+
+    def test_caller_gaps_to_wav_keep_the_programme_outside_the_description(self):
+        gaps = _write(os.path.join(self.tmp.name, "gaps.json"), json.dumps([{"start": 2.0, "end": 4.5}]))
+        out = os.path.join(self.tmp.name, "described.wav")
+        with chatterbox_ready(self.tmp.name):
+            rc, doc = run_cli("describe", self.video, self.desc, "--lang", "en", "-o", out, "--gaps", gaps, "--ffmpeg-skill",
+                              str(FFMPEG_SKILL_DIR), "--json")
+        self.assertEqual((rc, doc["ok"]), (0, True), doc)
+        ref = os.path.join(self.tmp.name, "ref.wav")
+        self.skill.extract_audio(self.video, ref)
+        import wave
+        with wave.open(ref, "rb") as a, wave.open(out, "rb") as b:
+            ra, rb = a.readframes(a.getnframes()), b.readframes(b.getnframes())
+        frame, end = 4, 2.6 + fake_line_seconds("A man walks in.")
+        for lo, hi in ((0.05, 2.55), (end + 0.05, 7.9)):
+            i, j = int(lo * 48000) * frame, int(hi * 48000) * frame
+            self.assertEqual(ra[i:j], rb[i:j], (lo, hi))
+        i, j = int(2.7 * 48000) * frame, int((end - 0.05) * 48000) * frame
+        self.assertNotEqual(ra[i:j], rb[i:j])
 
 
 @unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
