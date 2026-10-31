@@ -32,11 +32,17 @@ jobs:
         run: dubbing doctor --json --ffmpeg-skill "$RUNNER_TEMP/none" > doctor.json || test $? -eq 1
       - name: doctor lists all four engines, each MISSING, and translation as a caller input
         run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['chatterbox','kokoro','style_bert_vits2','voicevox'], e; assert all(v['status']=='MISSING' and v['install'] for v in e.values()), e; assert d['checks']['translation']['engine'] is None"
+      - name: the contract publishes all three ops (EXPERIMENTAL) and the consent record with no bypass
+        shell: bash
+        run: |
+          dubbing contract --json > contract.json
+          python -c "import json; c=json.load(open('contract.json', encoding='utf-8')); assert {p['id']: p['lifecycle'] for p in c['provides']}=={'speech.narrate':'EXPERIMENTAL','speech.dub':'EXPERIMENTAL','speech.audio_description':'EXPERIMENTAL'}, c['provides']; assert c['policy']['consent_record']['bypass'] is None; assert c['errors']['CONSENT_REQUIRED']['exit_code']==2"
 
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract, probe and join) and
-    # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001): NARRATE
-    # runs on the fake Chatterbox and the fake VOICEVOX. Nothing may skip here except the real-engine tests, which run in
+    # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001): NARRATE,
+    # DUB and AUDIO_DESCRIPTION run on the fake Chatterbox, VOICEVOX, Kokoro and Style-Bert-VITS2, the media through the
+    # real ffmpeg-skill (probe, join, audio, cut, silence) on test videos made with FFmpeg's own sources. Nothing may skip here except the real-engine tests, which run in
     # `engines` (Chatterbox) and `voicevox`.
     runs-on: ubuntu-24.04
     steps:
@@ -65,7 +71,7 @@ jobs:
       - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0)
         run: |
           dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
-          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4"
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4; o=d['checks']['operations']; assert all(o[k]['implemented'] for k in ('narrate','dub','audio_description')), o; assert o['audio_description']['inputs']['detect_gaps']['problem'] is None, o['audio_description']"
 
   engines:
     # Linux only, the real Chatterbox (ADR-005): chatterbox-tts 0.1.7 in its own virtual environment, as the README
@@ -143,10 +149,10 @@ jobs:
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
           ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real VOICEVOX"
-          for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english; do
+          for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english test_real_chatterbox_dubs_a_video; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done
-          { echo "### Real Chatterbox $CHATTERBOX_VERSION on CPU (NARRATE, text mode)"; echo;
+          { echo "### Real Chatterbox $CHATTERBOX_VERSION on CPU (NARRATE, text mode; DUB on a test video)"; echo;
             echo "| lang | lines | timeline s | expected s | wall s | clips s | Perth found |"; echo "|---|---|---|---|---|---|---|";
             cat "$DUBBING_MEASURE_LOG"; } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -199,7 +205,7 @@ jobs:
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
           ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real Chatterbox"
-          for t in test_real_voicevox_narrates_japanese test_real_voicevox_speakers_and_terms; do
+          for t in test_real_voicevox_narrates_japanese test_real_voicevox_speakers_and_terms test_real_voicevox_describes_a_video; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done
           { echo "### Real VOICEVOX 0.26.0 on CPU (NARRATE, text mode, default voice)"; echo;

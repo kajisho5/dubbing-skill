@@ -539,3 +539,72 @@ Roadmap step 8: the AGPL engine runs in a separate process, and it is done when 
 ### Not covered
 
 - No real-engine CI job. The Style-Bert-VITS2 server needs PyTorch, the BERT models and a voice model (several GB), and Kokoro needs PyTorch and the 82M checkpoint. Neither is downloaded here. Both clients are tested against the request and answer shapes read from the sources above.
+
+## ADR-012 SKILL.md, CI with real engines for every op, and the handoff to the agent's adapter
+
+### Context
+
+Roadmap step 9: SKILL.md, CI, and (on the agent side) an adapter. It is done when there is an agent plan or a handoff. The adapter lives in video-production-agent, which another maintainer is changing. This repository does not edit it. It writes down what the adapter has to call (below).
+
+### Decision
+
+- **SKILL.md** at the root, in the shape transcription-skill and audio-production-skill use: front matter with `name: dubbing` (the contract's `skill_id`) and a description of at most 1024 characters, then these sections:
+  - Workflow: doctor, translated text from elsewhere, the op, a report from the JSON.
+  - Request → command: a table.
+  - Consent: the record, and no bypass.
+  - Report format.
+  - Things that look right but are wrong.
+  - Boundaries.
+- **SKILL.md is tested against the code** (`tests/test_skill_md.py`):
+  - The front matter is valid.
+  - Every command it names exists, and every CLI command is in it.
+  - Every flag it names is an option of some command.
+  - Every error code it names is in `ERROR_TABLE`.
+  - The consent rule it states matches `policy.consent_record.bypass: null`.
+- **CI** (`.github/workflows/tests.yml`).
+  - `unit` (3 OSes × Python 3.9 / 3.12): the contract must publish the three ops as `EXPERIMENTAL`, the consent record with no bypass, and `CONSENT_REQUIRED` at exit 2.
+  - `integration`: doctor against the real ffmpeg-skill must report all three ops implemented, and gap detection usable (ffmpeg-skill/silence on audio). Its comment now says that DUB and AUDIO_DESCRIPTION run on real test videos.
+  - `engines`: `test_real_chatterbox_dubs_a_video` must run and pass. It dubs one English line over a 6 s test video with the real Chatterbox. Audio and picture must match, and the Perth mark must be read back. Its timing goes into the job summary.
+  - `voicevox`: `test_real_voicevox_describes_a_video` must run and pass. The real VOICEVOX speaks a description inside the quiet stretch that ffmpeg-skill/silence finds, with the `VOICEVOX:ずんだもん` credit, and audio and picture must match.
+  - No real-engine job for Style-Bert-VITS2 or Kokoro (ADR-011): their weights are not downloaded here.
+
+### Handoff: what video-production-agent's adapter calls (the contract changes of steps 5 to 8)
+
+- **Capabilities.** `speech.narrate`, `speech.dub` and `speech.audio_description` are all `EXPERIMENTAL`. Tools: `dubbing/narrate`, `dubbing/dub`, `dubbing/audio-description` (CLI `describe`), and `dubbing/fit`, `doctor`, `engines`, `contract`.
+- **New commands and their argv.** `contract --json` → `tools[].argv` is authoritative. The schemas: `dubbing/dub@1`, `dubbing/describe@1`, `dubbing/consent@1`.
+  - `dub <programme> <translated cues> --lang L -o <.mp4|.mov|.mkv|.wav> [--source-cues] [--speaker-voice S=V]... [--reference/--consent] [--speaker-reference S=P]... [--speaker-consent S=P]... [--audio-stream N] [--max-overrun S] [--on-unfit fail|keep] [--duck dB] [--voice-gain dB] [--translation-note JSON]`.
+  - `describe <programme> <descriptions> --lang L -o <out> (--gaps FILE | --detect-gaps) [--min-gap S] [--silence-threshold dB] [--engine E] [--voice V] [--accept-unverified-voice-terms] [--reference/--consent] [--on-unfit fail|skip] [--duck dB]`.
+  - `narrate` now takes `--reference PATH --consent PATH`. It no longer answers `NOT_IMPLEMENTED` for a reference.
+- **Inputs the agent must supply.**
+  - **Translated cues**: this skill never translates (ADR-003). Until subtitle-skill has an MT engine, the agent supplies them, together with `--source-cues` (subtitle-skill or transcription-skill output) and `--translation-note`.
+  - **Gaps** for AUDIO_DESCRIPTION: transcription-skill's speech-free spans, or `--detect-gaps`.
+  - **Consent records** for a real person's voice: the agent must never create one. It comes from the user.
+- **New error code.** `CONSENT_REQUIRED` (exit 2, not retryable). `details.reason` is `no_record`, `record_not_found`, `record_invalid`, `reference_mismatch` or `unverified_model`, and `details.problems` lists every problem. The agent should report it to the user and not retry.
+- **Unchanged codes with new meanings.**
+  - `TIMING_OVERFLOW` from DUB and AUDIO_DESCRIPTION carries `details.unfit` and `details.plan`.
+  - `INVALID_ARGUMENT` with `details.outside` is a description outside every gap.
+  - `FFMPEG_SKILL_UNAVAILABLE` from `describe --detect-gaps` means ffmpeg-skill/silence is not usable.
+- **Results.**
+  - DUB and AUDIO_DESCRIPTION return:
+    - `output` (`path`, `kind`, `duration`, `audio_duration`, `video_duration`, `av_delta`, `tolerance`)
+    - `fit`: the ADR-007 plan and `render.tempo`
+    - `mix.pieces`
+    - `clips[]`, each with `status`, `placed`, `start` and provenance
+    - `kept_original` / `skipped`
+    - `obligations` (`credit[]`, `credits[]`, `watermark`)
+    - `provenance`
+    - `warnings`
+  - AUDIO_DESCRIPTION adds `gaps` (`source`, `spans`).
+- **Provenance.** Every block gains `consent` (null, the verified record summary, or a list of them for an output). `credits` can now come from Kokoro (CC BY 3.0 voices) and Style-Bert-VITS2 (JVNV CC BY-SA 4.0, or a consented model). The ProductionReceipt must carry `obligations.credit` into the published description or credits.
+- **ffmpeg-skill dependency.** `cut` (`--start --end --accurate`) is now a required tool, and `audio` requires `--music-volume --gain`. `silence` (`--list --threshold --min-silence`) is optional. The agent's ffmpeg-skill checkout must declare them; doctor reports a gap.
+- **Engines.**
+  - Style-Bert-VITS2 synthesises through the user's server. Voices are `MODEL[:SPEAKER[:STYLE]]`. Non-JVNV models need consent.
+  - Kokoro synthesises in the worker, and its lookup now needs `config.json` next to the weights.
+  - VOICEVOX is usable in AUDIO_DESCRIPTION. DUB engines are `chatterbox` and `style_bert_vits2`.
+- **What the agent's plan should do.**
+  1. `doctor` first.
+  2. Translate elsewhere.
+  3. Run `fit` on clips if it wants to show what fits before rendering.
+  4. Then run `dub` / `describe`.
+  5. Carry `obligations` into the receipt.
+  6. Never pass a reference without a consent record from the user.

@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-Skeleton 0.1.0 ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contract` / `doctor` / `engines`, an engine registry whose EngineSpec carries licence, credit and watermark, and a worker. No op is implemented yet. ADR-001 checked the licences of the engines from ecosystem.json / OS ADR-012 (code and weights): Chatterbox Multilingual V3 (default, MIT, watermarked; its Japanese path pulls in GPL pykakasi, so it gets its own venv), VOICEVOX (credit per voice), Style-Bert-VITS2 (AGPL, separate process), Kokoro-82M. ADR-003: translation is a caller input, and no engine is chosen. Cloning a real voice needs recorded consent.
+0.1.0: NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)), DUB ([#7](https://github.com/kajisho5/dubbing-skill/pull/7)) and AUDIO_DESCRIPTION ([#9](https://github.com/kajisho5/dubbing-skill/pull/9)) are experimental, with all four engines synthesising ([#5](https://github.com/kajisho5/dubbing-skill/pull/5), [#10](https://github.com/kajisho5/dubbing-skill/pull/10)) and the consent gate for voice cloning ([#8](https://github.com/kajisho5/dubbing-skill/pull/8)). Skeleton ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contract` / `doctor` / `engines`, an engine registry whose EngineSpec carries licence, credit and watermark, and a worker. ADR-001 checked the licences of the engines from ecosystem.json / OS ADR-012 (code and weights): Chatterbox Multilingual V3 (default, MIT, watermarked; its Japanese path pulls in GPL pykakasi, so it gets its own venv), VOICEVOX (credit per voice), Style-Bert-VITS2 (AGPL, separate process), Kokoro-82M. ADR-003: translation is a caller input, and no engine is chosen. Cloning a real voice needs recorded consent.
 
 ## What this repository owns
 
@@ -39,7 +39,7 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
   - Done when: placement test
 - [x] **8. Style-Bert-VITS2 / Kokoro engines** ([#10](https://github.com/kajisho5/dubbing-skill/pull/10), [docs/decisions.md](docs/decisions.md) ADR-011; Style-Bert-VITS2 through the user's own API server on loopback (`POST /voice`), never imported; JVNV models with their CC BY-SA credit, any other model only with its owner's consent record; Kokoro in the worker from local files only, CC BY credit per voice; licence isolation written down and tested) — AGPL engine in a separate process
   - Done when: licence isolation documented
-- [ ] **9. SKILL.md, CI; (agent side) adapter**
+- [x] **9. SKILL.md, CI; (agent side) adapter** ([#11](https://github.com/kajisho5/dubbing-skill/pull/11), [docs/decisions.md](docs/decisions.md) ADR-012; skill side: `SKILL.md` checked against the CLI, CI asserts all three ops and the consent policy, real Chatterbox DUB and real VOICEVOX AUDIO_DESCRIPTION on test videos; agent side: handed off to video-production-agent with the contract changes listed in ADR-012)
   - Done when: agent plan or handoff
 
 ## Boundaries
