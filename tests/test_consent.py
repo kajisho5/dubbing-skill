@@ -258,13 +258,17 @@ class OpGateTests(unittest.TestCase):
             self.narrate(reference_path=short, consent_path=make_consent(self.tmp.name, short, name="s.json"))
         self.assertEqual(e.exception.code, "UNSUPPORTED_MEDIA")
 
-    def test_the_output_is_never_the_reference_or_the_record(self):
-        for path in (self.ref, self.record):
-            with self.assertRaises(DubbingError) as e:
-                narrate(NarrateRequest(script_path=self.script, output_path=path if path.endswith(".wav") else path + ".wav",
-                                       lang="en", reference_path=self.ref, consent_path=self.record, overwrite=True), skill=WaveSkill())
-            if path.endswith(".wav"):
-                self.assertEqual(e.exception.code, "OUTPUT_IS_INPUT")
+    def test_the_output_is_never_the_reference(self):
+        with self.assertRaises(DubbingError) as e:
+            with chatterbox_ready(self.tmp.name) as site:
+                before = len(fake_chatterbox_calls(site))
+                try:
+                    narrate(NarrateRequest(script_path=self.script, output_path=self.ref, lang="en", reference_path=self.ref,
+                                           consent_path=self.record, overwrite=True), skill=WaveSkill())
+                finally:
+                    self.assertEqual(fake_chatterbox_calls(site)[before:], [])
+        self.assertEqual(e.exception.code, "OUTPUT_IS_INPUT")
+        self.assertEqual(sha(self.ref), json.loads(Path(self.record).read_text(encoding="utf-8"))["reference"]["sha256"])
 
     def dub_setup(self):
         self.programme = write_tone_wav(os.path.join(self.tmp.name, "programme.wav"), seconds=6.0, rate=FAKE_RATE, freq=440.0)
