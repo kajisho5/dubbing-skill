@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-Scaffold: one-line README, no package. Engines already chosen in ecosystem.json / OS ADR-012: Chatterbox Multilingual V3 (default, MIT, watermarked), VOICEVOX, Style-Bert-VITS2 (AGPL, separate process), Kokoro-82M. Cloning a real voice needs recorded consent.
+Skeleton 0.1.0 ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contract` / `doctor` / `engines`, an engine registry whose EngineSpec carries licence, credit and watermark, and a worker. No op is implemented yet. ADR-001 checked the licences of the engines from ecosystem.json / OS ADR-012 (code and weights): Chatterbox Multilingual V3 (default, MIT, watermarked; its Japanese path pulls in GPL pykakasi, so it gets its own venv), VOICEVOX (credit per voice), Style-Bert-VITS2 (AGPL, separate process), Kokoro-82M. ADR-003: translation is a caller input, and no engine is chosen. Cloning a real voice needs recorded consent.
 
 ## What this repository owns
 
@@ -23,7 +23,7 @@ None. Expected: ffmpeg-skill probe, join, audio --replace / --music --duck, loud
 
 ## Steps
 
-- [ ] **1. Skeleton + contract/doctor + engine registry** — EngineSpec carries licence, credit, watermark
+- [x] **1. Skeleton + contract/doctor + engine registry** ([#3](https://github.com/kajisho5/dubbing-skill/pull/3), [docs/decisions.md](docs/decisions.md) ADR-001 engines, ADR-002 skeleton, ADR-003 translation as a caller input; `dubbing doctor` lists chatterbox, voicevox, style_bert_vits2 and kokoro with `OK` / `MISSING` / `INCOMPATIBLE` and an install line) — EngineSpec carries licence, credit, watermark
   - Done when: doctor lists all 4 engines with install status
 - [ ] **2. NARRATE op (Chatterbox)** — text or cues -> clips -> timeline WAV
   - Done when: duration within tolerance; receipt records engine + watermark
