@@ -111,15 +111,18 @@ class ContractTests(unittest.TestCase):
         self.assertEqual((rc, rc2, doc["skill_id"]), (0, 0, SKILL_ID))
         self.assertEqual(doc, doc2)
 
-    def test_json_is_utf8_even_on_a_legacy_code_page_console(self):
-        """Windows consoles and pipes default to a code page (cp1252) that cannot encode the Japanese credits."""
+    def test_json_is_ascii_and_parses_on_a_legacy_code_page_console(self):
+        """Windows consoles and pipes default to a code page (cp1252) that cannot encode the Japanese credits (ADR-004)."""
         child = dict(os.environ, PYTHONIOENCODING="cp1252", PYTHONUTF8="0",
                      PYTHONPATH=os.pathsep.join([str(ROOT / "src")] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]))
         proc = subprocess.run([sys.executable, "-m", "dubbing_skill.cli", "contract", "--json"], capture_output=True, env=child,
                               timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
-        doc = json.loads(proc.stdout.decode("utf-8"))
+        self.assertTrue(all(b < 128 for b in proc.stdout))
+        doc = json.loads(proc.stdout.decode("ascii"))
         self.assertIn("VOICEVOX:ずんだもん", doc["engines"]["registered"]["voicevox"]["credit"])
+        human = subprocess.run([sys.executable, "-m", "dubbing_skill.cli", "engines"], capture_output=True, env=child, timeout=60)
+        self.assertEqual(human.returncode, 0, human.stderr.decode("utf-8", "replace"))
 
     def test_no_shell_no_direct_ffmpeg_no_downloads_no_engine_imports(self):
         for f in SRC.rglob("*.py"):

@@ -1,6 +1,7 @@
 """dubbing CLI.
 
-stdout: with --json exactly one JSON document, on success and failure alike. stderr: diagnostics only.
+stdout: with --json exactly one JSON document, on success and failure alike, ASCII only (non-ASCII as \\u escapes,
+ADR-004), so it parses the same on any console code page. stderr: diagnostics only.
 Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exits errors.EXIT_CODES[code].
 
   dubbing contract --json     the contract (alias: skill --json)
@@ -42,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _emit(doc: Dict[str, Any], as_json: bool) -> None:
     if as_json:
-        sys.stdout.write(json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
+        sys.stdout.write(json.dumps(doc, indent=2, ensure_ascii=True, allow_nan=False) + "\n")
     else:
         _human(doc)
     sys.stdout.flush()
@@ -74,20 +75,19 @@ def _human(doc: Dict[str, Any]) -> None:
         print(f"{doc['skill_id']} {doc['version']}: " + ", ".join(f"{p['id']} ({p['lifecycle']})" for p in doc["provides"]))
 
 
-def _utf8_streams() -> None:
-    """JSON (and the Japanese credits in it) always leaves as UTF-8, also on a Windows console or pipe whose default
-    encoding is a legacy code page. Streams without reconfigure() (a test's StringIO) are left alone."""
+def _human_streams() -> None:
+    """Human-readable output never crashes on a legacy code page (Windows cp1252): characters the console cannot
+    encode are written as backslash escapes. JSON needs no such help, it is ASCII (ADR-004)."""
     for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", None) or "").lower().replace("-", "").replace("_", "")
-        if enc != "utf8" and hasattr(stream, "reconfigure"):
+        if hasattr(stream, "reconfigure"):
             try:
-                stream.reconfigure(encoding="utf-8", errors="replace")
-            except (ValueError, OSError):  # pragma: no cover - a stream that cannot change encoding
+                stream.reconfigure(errors="backslashreplace")
+            except (ValueError, OSError):  # pragma: no cover - a stream that cannot be reconfigured
                 pass
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    _utf8_streams()
+    _human_streams()
     args = build_parser().parse_args(argv)
     as_json = bool(getattr(args, "json", False))
     try:

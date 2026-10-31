@@ -16,4 +16,5 @@ Package skeleton (roadmap step 1).
   - Worker subprocess in its own process group, under the engine's own interpreter when configured; `process` raises `NOT_IMPLEMENTED`.
   - Typed errors; provenance block with credit and watermark; ffmpeg-skill adapter by capability detection (`probe`, `join`, `audio`, `loudness`).
 - ADR-003: translation is a caller input. No translation engine is chosen; the contract and doctor report it as `CALLER_SUPPLIED`.
+- ADR-004: JSON output is ASCII (`ensure_ascii`), human output uses `backslashreplace`, so Windows code pages neither crash the CLI nor its consumers (as audio-production-skill ADR-20).
 - The three ops (`speech.narrate`, `speech.dub`, `speech.audio_description`) are declared with lifecycle `PROPOSED` and are not implemented yet.

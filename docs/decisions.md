@@ -130,3 +130,15 @@ Dubbing needs text in the target language. The OS ecosystem roadmap (decided 202
   - A unit test fails if the source names an MT engine.
 - **Recorded, not produced.** The caller may describe the translation (engine, reviewer) with `--translation-note`. The note goes into each clip's provenance under `translation`. Without a note, the provenance records `{"provided_by": "caller", "engine": null}`.
 - **When subtitle-skill decides.** Nothing here changes except the agent's plan: subtitle-skill's translated cues become this skill's input.
+
+## ADR-004 The CLI's JSON is ASCII out, independent of the console code page
+
+### Context
+
+The EngineSpecs carry Japanese text (the VOICEVOX credit `VOICEVOX:ずんだもん`). Windows consoles and pipes encode stdio through a legacy code page (cp1252), so `contract --json` crashed with `UnicodeEncodeError`. A consumer that reads the output with the platform default encoding also failed (`UnicodeDecodeError` in the Windows CI check of `doctor.json`). audio-production-skill hit the same problem and settled it in its ADR-20.
+
+### Decision
+
+- Every JSON document is written with `ensure_ascii=True`: non-ASCII text appears as `\u` escapes. Any consumer on any code page parses the same document, and the decoded strings are unchanged.
+- Human-readable output (no `--json`) uses `errors="backslashreplace"` on stdout and stderr, so a console that cannot show Japanese prints escapes instead of crashing.
+- A unit test runs the CLI with `PYTHONIOENCODING=cp1252` and checks that the JSON is pure ASCII and still holds the Japanese credit. The CI steps also open `doctor.json` explicitly as UTF-8.

@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: dubbing doctor --json --ffmpeg-skill "$RUNNER_TEMP/none" > doctor.json || test $? -eq 1
       - name: doctor lists all four engines, each MISSING, and translation as a caller input
-        run: python -c "import json; d=json.load(open('doctor.json')); e=d['checks']['engines']; assert sorted(e)==['chatterbox','kokoro','style_bert_vits2','voicevox'], e; assert all(v['status']=='MISSING' and v['install'] for v in e.values()), e; assert d['checks']['translation']['engine'] is None"
+        run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['chatterbox','kokoro','style_bert_vits2','voicevox'], e; assert all(v['status']=='MISSING' and v['install'] for v in e.values()), e; assert d['checks']['translation']['engine'] is None"
 
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract and probe) and
@@ -64,4 +64,4 @@ jobs:
       - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0)
         run: |
           dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
-          python -c "import json; d=json.load(open('doctor.json')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4"
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4"
