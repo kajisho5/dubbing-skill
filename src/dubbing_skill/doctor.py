@@ -18,8 +18,9 @@ from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill
 
 DOCTOR_SCHEMA = f"{SKILL_ID}/doctor@1"
-# op -> roadmap step that implements it; NARRATE (step 2, ADR-005) and DUB (step 5, ADR-008) are implemented
-IMPLEMENTED_OPS: Dict[str, bool] = {"narrate": True, "dub": True, "audio_description": False}
+# op -> roadmap step that implements it; NARRATE (step 2, ADR-005), DUB (step 5, ADR-008) and AUDIO_DESCRIPTION
+# (step 7, ADR-010) are implemented
+IMPLEMENTED_OPS: Dict[str, bool] = {"narrate": True, "dub": True, "audio_description": True}
 OP_STEP = {"narrate": 2, "dub": 5, "audio_description": 7}
 TRANSLATION = {
     "status": "CALLER_SUPPLIED",
@@ -38,6 +39,7 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
     problems: List[str] = []
     warnings: List[str] = []
     cue_placement: Optional[str] = "ffmpeg-skill not usable"
+    gap_detection: Optional[str] = "ffmpeg-skill not usable"
     py_ok = sys.version_info >= (3, 9)
     checks["python"] = {"status": "OK" if py_ok else "MISSING", "version": platform.python_version(), "platform": platform.system(),
                         "install": None if py_ok else "Python >= 3.9"}
@@ -52,6 +54,9 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         warnings += ["ffmpeg-skill: " + w for w in info.warnings]
         if info.supported:
             cue_placement = info.optional_problem("pad")
+            gap_detection = info.optional_problem("silence")
+            if gap_detection:
+                warnings.append(f"ffmpeg-skill: describe --detect-gaps is refused: {gap_detection} (--gaps works; ADR-010)")
             if cue_placement:
                 warnings.append(f"ffmpeg-skill: narrate with timed cues is refused: {cue_placement} (plain text works; ADR-005)")
             ffdoc = skill.doctor()
@@ -85,6 +90,11 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         "text": {"ready": ops["narrate"]["ready"]},
         "cues": {"ready": bool(ops["narrate"]["ready"] and cue_placement is None),
                  "needs": "ffmpeg-skill/pad on audio-only input (ADR-005)", "problem": cue_placement},
+    }
+    ops["audio_description"]["inputs"] = {
+        "gaps": {"ready": ops["audio_description"]["ready"]},
+        "detect_gaps": {"ready": bool(ops["audio_description"]["ready"] and gap_detection is None),
+                        "needs": "ffmpeg-skill/silence --list on audio (ADR-010)", "problem": gap_detection},
     }
     checks["operations"] = ops
     missing_engines = sorted(eid for eid, e in engines.items() if e["status"] != OK)

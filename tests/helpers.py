@@ -312,9 +312,9 @@ class WaveSkill:
     a line over a piece of the programme (--music --music-volume --gain) on 16-bit PCM mono WAV with the wave module,
     each call recorded. Test-only; the package itself only ever runs ffmpeg-skill's tools."""
 
-    def __init__(self, pad_audio: bool = True) -> None:
+    def __init__(self, pad_audio: bool = True, drop: Optional[Tuple[str, str]] = None) -> None:
         from dubbing_skill.ffmpeg_skill import parse_contract
-        self._info = parse_contract(fake_contract(pad_audio), Path("wave-skill"))
+        self._info = parse_contract(fake_contract(pad_audio, drop), Path("wave-skill"))
         self.calls: List[Tuple[str, Any]] = []
 
     def info(self, timeout: float = 60.0) -> Any:
@@ -373,6 +373,41 @@ class WaveSkill:
             out.append(max(-32768, min(32767, int(round(v * g + m * mg)))))
         _write16(output, out, rate)
         return {"status": "completed"}
+
+
+    def silences(self, input_path: str, threshold_db: float, min_silence: float, timeout: Optional[float] = None) -> List[List[float]]:
+        """As ffmpeg-skill/silence --list: stretches at least `min_silence` long whose samples stay under the threshold."""
+        self.calls.append(("silences", (os.path.basename(input_path), threshold_db, min_silence)))
+        problem = self._info.optional_problem("silence")
+        if problem:
+            from dubbing_skill.errors import DubbingError
+            raise DubbingError("FFMPEG_SKILL_UNAVAILABLE", problem)
+        rate, samples = wav_samples(input_path)
+        limit = 32768 * 10 ** (threshold_db / 20.0)
+        spans, start = [], None
+        for i, v in enumerate(samples + [32767]):
+            if abs(v) < limit and i < len(samples):
+                start = i if start is None else start
+            elif start is not None:
+                if (i - start) / rate >= min_silence:
+                    spans.append([round(start / rate, 3), round(i / rate, 3)])
+                start = None
+        return spans
+
+
+def write_programme(path: str, pieces: List[Tuple[str, float]], rate: int = 24000, freq: float = 440.0) -> str:
+    """A mono WAV made of ("tone" | "silence", seconds) pieces, for the AUDIO_DESCRIPTION gap tests."""
+    import math
+    samples: List[int] = []
+    for kind, seconds in pieces:
+        n = int(round(seconds * rate))
+        if kind == "silence":
+            samples += [0] * n
+        else:
+            base = len(samples)
+            samples += [int(8000 * math.sin(2 * math.pi * freq * (base + i) / rate)) for i in range(n)]
+    _write16(path, samples, rate)
+    return path
 
 
 def mixed_sample(programme: int, voice: int, duck_db: float, voice_gain_db: float = 0.0) -> int:

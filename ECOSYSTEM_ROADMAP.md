@@ -15,11 +15,11 @@ Skeleton 0.1.0 ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contra
 |---|---|---|
 | AIナレーション(TTS) | experimental | NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)): text works with Chatterbox or VOICEVOX ([#5](https://github.com/kajisho5/dubbing-skill/pull/5)); timed cues wait for ffmpeg-skill/pad on audio |
 | 吹替・声の置換 | experimental | DUB ([#7](https://github.com/kajisho5/dubbing-skill/pull/7), ADR-008) on caller-translated cues; nobody translates today. Timing fit at tempo 1.0 until ffmpeg-skill changes tempo on audio alone |
-| 音声解説 | missing |  |
+| 音声解説 | experimental | AUDIO_DESCRIPTION ([#9](https://github.com/kajisho5/dubbing-skill/pull/9), ADR-010): caller gaps or ffmpeg-skill/silence |
 
 ## Wiring
 
-ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --gain`, `--replace`) and cut (DUB). Expected: loudness; inputs from transcription and subtitle-skill.
+ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --gain`, `--replace`) and cut (DUB, AUDIO_DESCRIPTION), silence `--list` (AUDIO_DESCRIPTION gaps). Expected: loudness; inputs from transcription and subtitle-skill.
 
 ## Steps
 
@@ -35,7 +35,7 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
   - Done when: A/V duration match
 - [x] **6. Consent gate for voice cloning** ([#8](https://github.com/kajisho5/dubbing-skill/pull/8), [docs/decisions.md](docs/decisions.md) ADR-009; `dubbing/consent@1` record: who consented, when, scope, evidence files and the reference clip, all hash-checked; `CONSENT_REQUIRED` before any engine work and again in the worker; no bypass; `tests/test_consent.py`) — refuse a reference voice without a consent record
   - Done when: security test
-- [ ] **7. AUDIO_DESCRIPTION op** — narration only inside caller-given gaps, ducked
+- [x] **7. AUDIO_DESCRIPTION op** ([#9](https://github.com/kajisho5/dubbing-skill/pull/9), [docs/decisions.md](docs/decisions.md) ADR-010; `dubbing describe <programme> <descriptions> (--gaps | --detect-gaps)`: descriptions only inside the caller's gaps or the quiet stretches ffmpeg-skill/silence finds, each ending by its cue and its gap, ducked over the programme on DUB's renderer; placement test in `tests/test_describe.py`) — narration only inside caller-given gaps, ducked
   - Done when: placement test
 - [ ] **8. Style-Bert-VITS2 / Kokoro engines** — AGPL engine in a separate process
   - Done when: licence isolation documented

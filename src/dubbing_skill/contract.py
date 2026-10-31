@@ -12,6 +12,8 @@ from .errors import ERROR_TABLE
 from .cues import MAX_LINE_CHARS, MAX_LINES
 from .ffmpeg_skill import FLAGS_USED, OPTIONAL_TOOLS, OPTIONAL_USE, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .consent import CONSENT_OPS, CONSENT_SCHEMA, RELATIONS
+from .describe import (DEFAULT_MIN_GAP, DEFAULT_SILENCE_THRESHOLD, DESCRIBE_SCHEMA, DESCRIBE_TEMPO, MIN_GAP_LIMIT,
+                       SILENCE_THRESHOLD_LIMIT)
 from .dub import ALIGN_TOLERANCE, DUB_SCHEMA, DUB_TEMPO, TEMPO_GAP
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, MAX_DUCK_DB, MAX_VOICE_GAIN_DB
 from .ops import NARRATE_SCHEMA
@@ -100,10 +102,33 @@ _OP_TOOLS = {
             "render": {"tempo": TEMPO_GAP, "silence": "none is made: the time between lines is the programme's own sound"},
             "output": "the programme with its audio replaced (video stream-copied), or the new programme audio as PCM WAV; "
                       "as long as the programme, audio as long as the picture (max(0.1 s, 1 %))"},
-    "audio_description": {"description": "Description narration placed only inside caller-given gaps, programme audio ducked",
-                          "inputs": ["source video", "description cues inside caller-given gaps"],
-                          "argv": ["describe", "<video>", "<gaps.json>", "--lang <ja>", "-o <out.mp4>", "[--engine chatterbox]",
-                                   "[--voice <id>]", "[--timeout 3600]", "[--overwrite]", "--json"]},
+    "audio_description": {
+        "description": "Audio description (ADR-010): description cues spoken only inside the programme's gaps (the caller's, "
+                       "or its quiet stretches found by ffmpeg-skill/silence), each from its cue's start and ending by its cue's "
+                       "end and its gap's end, over the programme's own sound lowered by --duck dB; the renderer is DUB's",
+        "inputs": ["the programme: a video (or an audio file with a .wav output)",
+                   "description cues (CUES_INPUT), already in --lang",
+                   "the gaps: --gaps <gaps.json> ([{start, end}] or {gaps: [...]}) or --detect-gaps (ffmpeg-skill/silence)",
+                   "the engine's voice (voicevox: a style id), or a reference voice with its owner's consent record (ADR-009)"],
+        "argv": ["describe", "<video|audio>", "<descriptions.json|.srt|.vtt>", "--lang <ja>", "-o <out.mp4|out.mov|out.mkv|out.wav>",
+                 "--gaps <gaps.json> | --detect-gaps", f"[--min-gap {DEFAULT_MIN_GAP:g}]",
+                 f"[--silence-threshold {DEFAULT_SILENCE_THRESHOLD:g}]", "[--engine chatterbox|voicevox|kokoro|style_bert_vits2]",
+                 "[--voice <id>]", "[--accept-unverified-voice-terms]", "[--reference <voice.wav> --consent <consent.json>]",
+                 "[--audio-stream 0]", "[--on-unfit fail|skip]", f"[--duck {DEFAULT_DUCK_DB:g}]",
+                 f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--seed 0]", "[--timeout 3600]", "[--overwrite]",
+                 "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
+        "refused": {"a description that starts outside every gap": "INVALID_ARGUMENT, before the engine runs",
+                    "a description longer than its window": "TIMING_OVERFLOW unless --on-unfit skip (left out, reported)",
+                    "--detect-gaps without ffmpeg-skill/silence on audio": "FFMPEG_SKILL_UNAVAILABLE (pass --gaps)",
+                    "a reference voice without a consent record that checks out": "CONSENT_REQUIRED (ADR-009)"},
+        "schema": DESCRIBE_SCHEMA,
+        "limits": {"lines": MAX_LINES, "chars_per_line": MAX_LINE_CHARS, "tempo": DESCRIBE_TEMPO,
+                   "min_gap": {"default": DEFAULT_MIN_GAP, "range": list(MIN_GAP_LIMIT), "unit": "s"},
+                   "silence_threshold": {"default": DEFAULT_SILENCE_THRESHOLD, "range": list(SILENCE_THRESHOLD_LIMIT), "unit": "dBFS"},
+                   "duck_db": {"default": DEFAULT_DUCK_DB, "range": [0.0, MAX_DUCK_DB]},
+                   "duration_tolerance": "max(0.1 s, 1 %)"},
+        "output": "the programme with its audio replaced (video stream-copied), or the new programme audio as PCM WAV; "
+                  "every placed description inside its gap; as long as the programme, audio as long as the picture"},
 }
 
 

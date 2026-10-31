@@ -431,3 +431,46 @@ Roadmap step 6: refuse a reference voice without a consent record. It is done wh
 
 - Style-Bert-VITS2 models trained on a real person's voice take the same record (step 8).
 - An optional signature over the record (a detached signature checked against a key the user names), if a production needs to know who wrote the record.
+
+## ADR-010 AUDIO_DESCRIPTION: descriptions only inside the programme's gaps, on DUB's renderer
+
+### Context
+
+Roadmap step 7: narration only inside caller-given gaps, ducked. It is done when a placement test passes. The user also wants descriptions put into the programme's silent stretches (無音区間). ADR-008's renderer already lays spoken lines over a programme at given times, ducked, through ffmpeg-skill only. What changes is where a line may go. Checked against ffmpeg-skill 2.24.0.
+
+### Findings
+
+- ffmpeg-skill/silence declares `audio_only: true`. With `--list`, it writes nothing and returns `silences: [[start, end], ...]`, using `silencedetect` at `--threshold` dBFS (default -35) for stretches of at least `--min-silence` seconds. This was checked by hand: a WAV of 2 s tone, 2 s digital silence and 2 s tone gave `silences: [[2.0, 4.0]]`.
+
+### Decision
+
+- **Op.** `dubbing describe <programme> <descriptions> --lang L -o <out> (--gaps gaps.json | --detect-gaps)` (`describe.py`). The tool is `dubbing/audio-description` and the schema is `dubbing/describe@1`. `speech.audio_description` moves to `EXPERIMENTAL`.
+  - Engines: those whose spec serves `audio_description`: Chatterbox (default), VOICEVOX (with its credit and terms gate, ADR-006), and Kokoro and Style-Bert-VITS2 (step 8).
+  - A reference voice needs its consent record (ADR-009).
+- **Gaps.** Give exactly one source, else `INVALID_ARGUMENT`.
+  - `--gaps FILE`: the caller's gaps. A JSON list of `{start, end}` (or `{gaps: [...]}`), in order and apart, at most 10,000. They can come, for example, from transcription-skill's speech segments.
+  - `--detect-gaps`: the programme's quiet stretches, found by ffmpeg-skill/silence `--list` on the extracted programme audio (the chosen `--audio-stream`). `--silence-threshold` ranges from -90 to -10 dBFS (default -35). `--min-gap` ranges from 0.2 to 30 s (default 1). Stretches shorter than `--min-gap` are not gaps.
+  - `silence` is an *optional* tool (`OPTIONAL_TOOLS`, with flags `input list threshold min_silence json`, `audio_only` required). Without it, `--detect-gaps` is `FFMPEG_SKILL_UNAVAILABLE` before the engine runs. `doctor` reports `operations.audio_description.inputs.detect_gaps`.
+- **Where a description may go.**
+  - A description is spoken from its cue's start. Its window ends at the earlier of its cue's end and the end of the gap its start falls in. It never runs past a gap.
+  - A description whose start is in no gap is refused with `INVALID_ARGUMENT`, naming every such description. With `--gaps`, this happens before the engine and before any media work. With `--detect-gaps`, it happens after the detection and before the engine.
+- **Fit.** Each window is a timing-fit slot (ADR-007) whose limit is its own end, at tempo 1.0 (no audio-only tempo in ffmpeg-skill). A description longer than its window fails the op with `TIMING_OVERFLOW`, or with `--on-unfit skip` is left out and listed in `skipped`.
+- **Render.** The renderer is ADR-008's `mixing.render`: the programme is lowered by `--duck` dB (default 12) under each description, and untouched elsewhere. Output kinds, validation (A/V duration), placement in the output directory, and provenance are the same as for DUB. The receipt adds `gaps` (the source and the spans), each clip's `gap` and `window`, and the gap settings in the provenance.
+- **Rejected.**
+  - Finding gaps by speech detection (VAD) in this skill. That is transcription-skill's job, and its segments can be passed as `--gaps`.
+  - Moving a description to the next gap when it does not fit. A description belongs to its picture. The caller decides where it goes.
+
+### Tests
+
+- `tests/test_describe.py`, 13 tests, no FFmpeg (WaveSkill gained `silences`).
+  - **The placement test**: every placed description lies inside its gap and its cue window. The programme is untouched sample for sample everywhere else, and changed under each description.
+  - The mix under a description, sample-exact. Gaps from the caller and from silence detection, and `--min-gap`. The window ends at the gap's end. `TIMING_OVERFLOW` and `skip`.
+  - VOICEVOX's credit in `obligations`. Every refusal before the engine, including a missing silence capability. The gaps file shapes. The contract and CLI.
+- Integration: an 8 s H.264/AAC test video, silent from 2.0 to 4.5 s.
+  - `--detect-gaps` through the real ffmpeg-skill/silence finds that gap, and the description lands inside it. Audio and picture match.
+  - The CLI with `--gaps` to `.wav`: the programme outside the description is byte-identical to a plain extraction.
+
+### Follow-ups
+
+- Extended audio description, which pauses the picture when a gap is too short. It needs video re-timing, which is not provided (`not_provided`: lip sync / video re-timing).
+- Fades at the description's edges (ADR-008 follow-up).
