@@ -372,11 +372,14 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual((e.exception.code, e.exception.exit_code), ("ENGINE_UNAVAILABLE", 3))
 
     def test_running_engine_reaches_not_implemented_through_the_worker(self):
-        with tempfile.TemporaryDirectory() as tmp, fake_app({"/version": (200, "0.24.1")}) as url, \
-                env(DUBBING_VOICEVOX_URL=url), self.assertRaises(DubbingError) as e:
-            run_engine("voicevox", EngineRequest("narrate", "こんにちは", "ja", os.path.join(tmp, "b.wav")), 60, tmp)
-        self.assertEqual((e.exception.code, e.exception.exit_code), ("NOT_IMPLEMENTED", 5))   # step 3 implements it
-        self.assertEqual((e.exception.details["op"], e.exception.details["roadmap_step"]), ("narrate", 3))
+        # VOICEVOX synthesises since step 3 (test_voicevox.py); Style-Bert-VITS2 is still declared only (step 8)
+        info = {"0": {"config_path": "c", "model_path": "m", "device": "cpu", "spk2id": {"jvnv-F1-jp": 0}, "id2spk": {}, "style2id": {}}}
+        with tempfile.TemporaryDirectory() as tmp, \
+                fake_app({"/models/info": (200, info), "/openapi.json": (200, {"info": {"version": "2.7.0"}})}) as url, \
+                env(DUBBING_SBV2_URL=url), self.assertRaises(DubbingError) as e:
+            run_engine("style_bert_vits2", EngineRequest("narrate", "こんにちは", "ja", os.path.join(tmp, "b.wav")), 60, tmp)
+        self.assertEqual((e.exception.code, e.exception.exit_code), ("NOT_IMPLEMENTED", 5))   # step 8 implements it
+        self.assertEqual((e.exception.details["op"], e.exception.details["roadmap_step"]), ("narrate", 8))
 
     def test_op_the_engine_does_not_serve_is_invalid(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(DubbingError) as e:

@@ -18,7 +18,7 @@
 
 AI narration (TTS), voice replacement (dubbing) and audio description, timed to the picture, for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Every media step (probe, assembling clips, putting the voice into the video, loudness) goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.1.0, NARRATE experimental.** `contract`, `doctor`, `engines` and `narrate` work. DUB and AUDIO_DESCRIPTION are declared (`PROPOSED`) and arrive in [roadmap](ECOSYSTEM_ROADMAP.md) steps 5 and 7.
+**Status: 0.1.0, NARRATE experimental.** `contract`, `doctor`, `engines` and `narrate` work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). DUB and AUDIO_DESCRIPTION are declared (`PROPOSED`) and arrive in [roadmap](ECOSYSTEM_ROADMAP.md) steps 5 and 7.
 
 | Op | Capability | Default engine | Lifecycle | Step |
 |---|---|---|---|---|
@@ -34,6 +34,7 @@ dubbing doctor                       # the four engines: OK / MISSING / INCOMPAT
 dubbing engines --json               # status, version, licences, credit and watermark per engine
 dubbing contract --json              # machine-readable contract (alias: skill --json)
 dubbing narrate script.txt --lang ja -o narration.wav --json   # text or cues -> one clip per line -> timeline WAV
+dubbing narrate script.txt --lang ja -o narration.wav --engine voicevox --json   # the VOICEVOX app on 127.0.0.1:50021
 ```
 
 ## NARRATE
@@ -47,6 +48,10 @@ dubbing narrate script.txt --lang ja -o narration.wav --json   # text or cues ->
 - **Overflow.** A line still being spoken when the next cue starts fails with `TIMING_OVERFLOW`, or moves the later lines back with `--on-overflow shift`. Fitting lines to their windows is step 4.
 - **Validation.** Each clip and the timeline go through ffmpeg-skill/probe. The timeline must be as long as the layout says, within max(0.1 s, 1 %). It is renamed into place from a private directory next to the output.
 - **Receipt.** The JSON result holds a provenance block per clip and one for the timeline: engine, version, model file, licences, credit, the declared watermark and the one read back, text hash, seed, translation note (`--translation-note`) and ffmpeg-skill version. `obligations` lists the credit and watermark the published video inherits.
+- **VOICEVOX.** `--engine voicevox` uses the VOICEVOX app you run (editor, engine or `docker run --rm -p '127.0.0.1:50021:50021' voicevox/voicevox_engine:cpu-latest`), over its own HTTP API (`/audio_query`, then `/synthesis`) on loopback only. Details are in [ADR-006](docs/decisions.md).
+  - `--voice` is a style id, the API's `speaker`. The default is 3, ずんだもん ノーマル.
+  - Every clip records its speaker, character and credit (`VOICEVOX:ずんだもん`) under `provenance.credits`, and `obligations.credit` lists what the published video must show.
+  - Only characters whose terms were verified are used by default: ずんだもん and 四国めたん, matched by uuid and name. Any other character is refused with `TERMS_UNVERIFIED`. Pass `--accept-unverified-voice-terms` only after you have checked its terms yourself. Its credit is then recorded as unverified.
 - **Reference voice.** `--reference` / `--consent` (voice cloning) are refused with `NOT_IMPLEMENTED` until the consent gate of step 6 exists. Nothing is read.
 
 ## Engines (optional, [ADR-001](docs/decisions.md))
@@ -54,7 +59,7 @@ dubbing narrate script.txt --lang ja -o narration.wav --json   # text or cues ->
 | Engine | Code / weights licence | Japanese | Obligation | How the skill reaches it |
 |---|---|---|---|---|
 | `chatterbox` Chatterbox Multilingual (default; `chatterbox-tts` 0.1.7 loads the V2 checkpoint, ADR-005) | MIT / MIT | native | Perth watermark in every clip | worker, ideally its own venv: `DUBBING_CHATTERBOX_PYTHON` |
-| `voicevox` VOICEVOX | ENGINE LGPL-3.0, CORE MIT / per voice library terms | native | credit `VOICEVOX:<character>` | the app on loopback: `DUBBING_VOICEVOX_URL` (default `http://127.0.0.1:50021`) |
+| `voicevox` VOICEVOX (NARRATE since step 3, ADR-006) | ENGINE LGPL-3.0, CORE MIT / per voice library terms (ずんだもん, 四国めたん verified; others refused unless acknowledged) | native | credit `VOICEVOX:<character>`, per clip | the app on loopback: `DUBBING_VOICEVOX_URL` (default `http://127.0.0.1:50021`) |
 | `style_bert_vits2` Style-Bert-VITS2 | AGPL-3.0 / per model (JP-Extra AGPL-3.0, JVNV CC BY-SA 4.0) | native | credit per model | its own API server on loopback: `DUBBING_SBV2_URL` (default `http://127.0.0.1:5000`); never imported |
 | `kokoro` Kokoro-82M | Apache-2.0 / Apache-2.0 | weak | CC BY credit for four Japanese voices | worker, ideally its own venv: `DUBBING_KOKORO_PYTHON` |
 
@@ -79,11 +84,11 @@ python -m unittest discover -s tests -v
 Unit tests need no engine, no weights, no FFmpeg and no network:
 
 - Package lookups are mocked, and the Hugging Face cache is a temporary directory.
-- VOICEVOX and Style-Bert-VITS2 are replaced by fake apps on loopback.
+- VOICEVOX and Style-Bert-VITS2 are replaced by fake apps on loopback. The fake VOICEVOX answers `/version`, `/speakers`, `/audio_query` and `/synthesis` in the shapes of voicevox_engine 0.26.0, and refuses any other request shape.
 - NARRATE runs the real worker on a fake `chatterbox` package that makes tones or silence of a known length.
 - A WAV-only stand-in replaces ffmpeg-skill.
 
-The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files.
+The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files. The real-VOICEVOX tests run only with `DUBBING_REAL_VOICEVOX=1`, and skip when the app is absent. CI's `voicevox` job sets it, after starting the official CPU image 0.26.0 (pinned by digest) on 127.0.0.1:50021.
 
 ## Licence
 

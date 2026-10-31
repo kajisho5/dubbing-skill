@@ -2,6 +2,13 @@
 
 ## 0.1.0 - unreleased
 
+VOICEVOX engine (roadmap step 3, ADR-006).
+
+- `dubbing narrate ... --engine voicevox`: the VOICEVOX app on loopback synthesises each line with its own API (`POST /audio_query`, then `POST /synthesis`, as read from voicevox_engine 0.26.0 and checked against 0.14.0). The client is in `engines/lookup.py` (`loopback_request`), which refuses any non-loopback host before connecting and caps answer sizes. `--voice` is a style id, default 3 (ずんだもん ノーマル).
+- Credit per character: each clip's provenance has `credits` (speaker, character, uuid, style, `VOICEVOX:<character>`, whether the terms were verified). `obligations.credit` / `obligations.credits` list each distinct credit once.
+- Terms gate: only ずんだもん and 四国めたん (terms verified in ADR-001, matched by uuid and name) are allowed by default. Any other character is refused with the new error code `TERMS_UNVERIFIED` (exit 2) unless `--accept-unverified-voice-terms` is given. Its credit is then recorded as unverified, with a warning. The contract publishes the rule under `policy.voice_terms`.
+- Tests: a fake VOICEVOX server on 127.0.0.1 in the test process. It checks the request shapes and returns WAVs of a known length. CI: a new `voicevox` job runs the real engine (official CPU image 0.26.0, pinned by digest, on 127.0.0.1 only).
+
 NARRATE (roadmap step 2, ADR-005).
 
 - `dubbing narrate <script> --lang <lang> -o <out.wav>`: plain text (`.txt`) or cues (`.json`, `.srt`, `.vtt`), one clip per line, laid on a mono timeline WAV through ffmpeg-skill (`join --transition none --sample-rate --channels`). `speech.narrate` is `EXPERIMENTAL`.

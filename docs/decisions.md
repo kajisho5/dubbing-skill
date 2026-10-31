@@ -189,3 +189,77 @@ Roadmap step 2: text or cues -> clips -> timeline WAV, done when the duration is
 - Round trip through transcription-skill on the Japanese fixture (ADR-001) before NARRATE is called stable.
 - Chatterbox V3 (`t3_mtl23ls_v3.safetensors`): adopt it when a released `chatterbox-tts` loads it. Then the version range, `MODEL_FILES` and the CI pins move together.
 - Step 4 (timing fit) replaces the overrun warning with fitting. Step 6 (consent) replaces the `NOT_IMPLEMENTED` refusal of `--reference`.
+
+## ADR-006 VOICEVOX engine: the app's own HTTP API on loopback, a credit per character, unverified characters refused
+
+### Context
+
+Roadmap step 3: VOICEVOX as a local app over HTTP, its credit in the provenance, done when it skips when the app is absent. ADR-001 checked the licences (ENGINE LGPL-3.0, CORE MIT, per voice library terms) and the terms of the ずんだもん family. It left the other characters unverified. ADR-002 already reaches the app on loopback only, for `GET /version`. This ADR adds synthesis and the credit and terms rules.
+
+### Sources read (read-only, 2026-10-31)
+
+- **VOICEVOX/voicevox_engine, tag `0.26.0`** (commit `7ebc23342bd812f5a72816330f62f110ccca8bdc`, 2026-10-19, the latest release):
+  - `voicevox_engine/app/routers/tts_pipeline.py`: `POST /audio_query` and `POST /synthesis`.
+  - `voicevox_engine/model.py`: `AudioQuery`.
+  - `voicevox_engine/tts_pipeline/model.py`: `AccentPhrase`, `Mora`.
+  - `voicevox_engine/app/routers/character.py`: `GET /speakers`.
+  - `voicevox_engine/metas/metas.py`: `Speaker`, `SpeakerStyle`, `StyleType`.
+  - `voicevox_engine/app/routers/engine_info.py`: `GET /version`.
+  - `voicevox_engine/dev/core/mock.py`: `default_sampling_rate = 24000`.
+  - Also `LICENSE`, `LGPL_LICENSE`, `README.md` (Docker usage) and `Dockerfile` (the image prints the engine terms from voicevox_resource at start).
+- **VOICEVOX/voicevox_engine, tag `0.14.0`** (commit `2c4f52a9ec80cda5936edecccc4c2aabd14a78f7`), the bottom of the supported range: `run.py` (the same two endpoints with `text`, `speaker` as query parameters and the AudioQuery as the body) and `voicevox_engine/model.py`, `metas/Metas.py`. Every field read here exists there too. Styles have no `type` in 0.14.
+- **VOICEVOX/voicevox_vvm, tag `0.17.0`** (commit `dd3e6a090b500b8cf8cad047645233d2183d8c71`): `README.md`, the style id table ("音声モデル(.vvm)ファイルと声（キャラクター・スタイル名）とスタイル ID の対応表") and the voice library terms; `TERMS.txt`.
+- **VOICEVOX/voicevox_resource, tag `0.26.0`** (commit `37c265375e05313486ebf2024b1679d6952a53d8`): `character_info/ずんだもん_388f246b-8c41-4ac1-8e2d-5d79f3ff56d9/policy.md`, `character_info/四国めたん_7ffcb7ce-00ec-4bdc-82cd-45a8889e43ff/policy.md` (the character uuids), and `engine/README.md` (the engine terms the official image ships).
+- **Docker Hub** `voicevox/voicevox_engine`: tag `cpu-amd64-ubuntu24.04-0.26.0`, digest `sha256:cb8ad001c69fc7b8864b07a1d309a3a180df953654c655d328065b5e0cadc658`, about 2.0 GB compressed.
+
+### The API as read
+
+| Call | Request | Answer |
+|---|---|---|
+| `GET /version` | none | a JSON string, the engine version |
+| `GET /speakers` | (`core_version`) | `[Speaker]`: `name`, `speaker_uuid`, `styles: [{name, id, type}]`, `version`, `supported_features`. `type` is one of `talk`, `singing_teacher`, `frame_decode`, `sing`, `streaming_talk`, default `talk` |
+| `POST /audio_query` | query `text`, `speaker` (the **style** id: `style_id` with alias `speaker`), optional `enable_katakana_english`, `core_version`; no body | `AudioQuery`: `accent_phrases` (`[{moras: [{text, consonant, consonant_length, vowel, vowel_length, pitch}], accent, pause_mora, is_interrogative}]`), `speedScale` (> 0), `pitchScale`, `intonationScale`, `volumeScale` (>= 0), `prePhonemeLength`, `postPhonemeLength` (>= 0), `pauseLength` (null), `pauseLengthScale`, `outputSamplingRate` (the core's default, 24000), `outputStereo` (false), `kana` (read-only) |
+| `POST /synthesis` | query `speaker`, optional `enable_interrogative_upspeak` (default true), `core_version`; body: the AudioQuery as JSON | `audio/wav`, written by `soundfile.write(..., samplerate=query.outputSamplingRate, format="WAV")`: PCM 16-bit (soundfile's WAV default), mono unless `outputStereo` |
+
+Synthesis is *talk* styles only. `streaming_talk` styles also synthesise, and a style without `type` (0.14) is a talk style.
+
+### Character terms
+
+The engine terms (voicevox_resource `engine/README.md`, the same text as voicevox_vvm `TERMS.txt`) allow commercial and non-commercial use, require a credit that shows VOICEVOX was used, and defer to each voice library's terms. The table below shows what this skill does by default.
+
+| Character (speaker_uuid) | Styles (ids, vvm 0.17.0) | Credit | Terms | Default |
+|---|---|---|---|---|
+| ずんだもん (`388f246b-8c41-4ac1-8e2d-5d79f3ff56d9`) | ノーマル 3, あまあま 1, ツンツン 7, セクシー 5, ささやき 22, ヒソヒソ 38, ヘロヘロ 75, なみだめ 76 | `VOICEVOX:ずんだもん` | **Verified** (ADR-001, zunko.jp 音源利用規約; re-read in policy.md): commercial and non-commercial use with the credit; no political or religious use, no information products, no deliberately misleading content; credit-free commercial use is a paid contract | Allowed; style 3 is the default voice |
+| 四国めたん (`7ffcb7ce-00ec-4bdc-82cd-45a8889e43ff`) | ノーマル 2, あまあま 0, ツンツン 6, セクシー 4, ささやき 36, ヒソヒソ 37 | `VOICEVOX:四国めたん` | **Verified** (same terms page as ずんだもん) | Allowed |
+| Every other character | per vvm table | `VOICEVOX:<name>` derived from `/speakers`, **unverified** | **Unverified**: not checked against the character's own terms page | Refused with `TERMS_UNVERIFIED` unless the caller acknowledges it |
+
+Why the others are not derived automatically: the bundled terms text itself shows that the credit and the allowed uses differ by character. もち子さん needs `VOICEVOX:もち子(cv 明日葉よもぎ)` and excludes voice works, voice assets and games. Voidoll needs `VOICEVOX:Voidoll(CV:丹下桜)`. No.7 and ユーレイちゃん are non-commercial without a prior check. 青山龍星 and 後鬼 need a prior check when a company is involved. These are summaries in VOICEVOX's own README, not the characters' terms pages, and they were not verified here. So "VOICEVOX:<name>" can be wrong, and use can be forbidden.
+
+### Decision
+
+- **Engine.** `voicevox` synthesises in the worker, one line at a time: `POST /audio_query?text=<line>&speaker=<id>` (no body), then `POST /synthesis?speaker=<id>` with the returned AudioQuery as `application/json`. `outputStereo` is set to false. Nothing else in the query is changed. Defaults: speedScale 1, pre/post 0.1 s. The parameters are recorded. The answer must be a RIFF/WAVE file, mono, at the query's `outputSamplingRate`, with frames, else `INVALID_RESULT`. It is written as `<clip>.part` and renamed into place. An HTTP error from the app is `ENGINE_FAILED` with the status and the app's `detail`. VOICEVOX takes no seed, so the clip's provenance records `seed: null`.
+- **Loopback only.** All HTTP is in `engines/lookup.py` (`loopback_request`, used by `loopback_get_json`). The host must be `127.0.0.1`, `localhost` or `::1` over `http://`, and it is checked before a connection object is created. Any other URL raises before connecting: the op reports `INCOMPATIBLE`, a call reports `ENGINE_UNAVAILABLE`. Answers are size-capped (8 MB JSON, 64 MB WAV), and an oversized answer is an error, not a truncation. No proxy is used. http.client does not read proxy variables, and the worker's environment does not carry them.
+- **Voice.** `--voice` is a style id, the API's `speaker`, an integer. The default is 3, ずんだもん ノーマル. It is resolved through `GET /speakers` (once per engine instance) to its character, uuid and style. An unknown id, or a style that cannot talk (`sing`, `singing_teacher`, `frame_decode`), is refused with `INVALID_ARGUMENT`, before any synthesis.
+- **Terms gate.** A character is verified only when both its `speaker_uuid` and its `name` match the table above. Otherwise the op refuses with the new code `TERMS_UNVERIFIED` (exit 2, not retryable), in the caller's checks before any media work, and again in the worker. The refusal names the character, the style, the derived credit and how to acknowledge. The caller can acknowledge with `--accept-unverified-voice-terms` (`NarrateRequest.accept_unverified_terms`). The credit is then `VOICEVOX:<name>` with `terms_verified: false` and `acknowledged_unverified: true`, and the op adds a warning.
+- **Credit in the receipt.** Each clip's provenance gains `credits`: `[{credit, character, speaker, speaker_uuid, style, style_type, speaker_version, terms_verified, terms, conditions, checked_in, acknowledged_unverified}]`. The timeline's provenance and the op's `obligations.credits` hold each distinct credit once, and `obligations.credit` holds their strings (`["VOICEVOX:ずんだもん"]`). For an engine with no per-voice credit, `credits` is the engine's declared credit, or `[]`. Chatterbox's receipt is unchanged apart from the empty `credits`.
+- **Contract.** `policy.voice_terms.voicevox` publishes the verified characters (uuid, credit, terms, conditions), the default voice and the unverified rule. The narrate tool lists `--accept-unverified-voice-terms` and the refusal. `provenance.fields` gains `credits`.
+- **Version range** stays `>=0.14.0 <1.0.0`. Every field used is present in 0.14.0 and 0.26.0.
+- **Absent app.** Doctor reports `MISSING` with the Docker line, as before. NARRATE with `--engine voicevox` is refused with `ENGINE_UNAVAILABLE` before any work. The real-engine tests skip.
+
+### Real-engine CI (`voicevox` job, Linux)
+
+It is feasible, and it runs on every pull request.
+
+- **Licence of the engine binary.** The repository's `LICENSE` makes the engine LGPL-3.0, or a separate licence that does not require the source. The image also bundles VOICEVOX CORE (MIT from 0.16) and the voice models. Their terms (`engine/README.md`, which the image prints at start) allow commercial and non-commercial use and redistribution inside an application. They forbid reverse engineering. CI only pulls the official image and runs it. Nothing is redistributed, modified or linked into this MIT package, and the audio made is discarded. That is plain use under all three licences.
+- **The job.** It pulls `voicevox/voicevox_engine:cpu-amd64-ubuntu24.04-0.26.0`, pinned by digest, and publishes it on `127.0.0.1:50021` only. It waits for `/version`, then checks that doctor reports VOICEVOX OK at 0.26.0. Then it runs every test with `DUBBING_REAL_VOICEVOX=1`. `test_real_voicevox_narrates_japanese` (default voice, duration within tolerance, credit `VOICEVOX:ずんだもん` with speaker 3 and its uuid) and `test_real_voicevox_speakers_and_terms` (the verified table matches the real `/speakers`, and a character outside it is refused) must run and pass. Only the real-Chatterbox tests may skip. Timings go into the job summary.
+- **Not covered.** macOS, Windows, the GPU image and the desktop app. The unit jobs cover the client side on all three systems against the fake engine.
+
+### Tests without the app
+
+`tests/helpers.py` `fake_voicevox()` runs a threaded HTTP server on 127.0.0.1, on a free port, inside the test process. It answers the four endpoints in the shapes above. It returns 422, as FastAPI does, to a request whose shape differs: `text` and `speaker` must be query parameters, `/audio_query` must have no body, and `/synthesis` must have a JSON AudioQuery body that passes the model's constraints. Its WAV lasts `prePhonemeLength + Σ mora lengths / speedScale + postPhonemeLength`, which is 0.2 s + 0.06 s per character. Modes: non-WAV, stereo, and a failing `/audio_query`. Every call is recorded. `tests/test_voicevox.py` runs the engine through the real worker and the whole NARRATE op with WaveSkill. It checks the request shapes and order, clip lengths, the credit block in each clip, the timeline and `obligations`, the terms gate (impostor uuid, renamed character, acknowledgement), singing styles, the 0.14 shape without `type`, bad answers, an app that disappears, and the loopback refusal (no connection object is ever created for a non-loopback URL).
+
+### Follow-ups
+
+- Check the terms of more characters against their own terms pages, and add them to `VERIFIED_CHARACTERS` with their exact credit strings. Candidates: the other zunko.jp characters (東北ずん子, 東北きりたん, 東北イタコ, 九州そら, 中国うさぎ, 中部つるぎ, あんこもん), which use the same terms page as ずんだもん.
+- A voice per cue speaker (`speaker` in the cues) belongs to DUB (step 5).
+- `ecosystem.json` (AI-video-production-OS): the VOICEVOX note can add "未確認キャラは明示的な同意フラグなしでは拒否".

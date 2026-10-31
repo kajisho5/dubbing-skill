@@ -7,6 +7,7 @@ from typing import Any, Dict
 from . import PACKAGE_NAME, SKILL_ID, __version__
 from .doctor import DOCTOR_SCHEMA, IMPLEMENTED_OPS, OP_STEP, TRANSLATION
 from .engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
+from .engines.voicevox import DEFAULT_STYLE_ID as VOICEVOX_DEFAULT_STYLE, VERIFIED_CHARACTERS
 from .errors import ERROR_TABLE
 from .cues import MAX_LINE_CHARS, MAX_LINES
 from .ffmpeg_skill import FLAGS_USED, OPTIONAL_TOOLS, OPTIONAL_USE, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
@@ -28,15 +29,20 @@ _OP_TOOLS = {
     "narrate": {"description": "Narration from text or cues: one clip per line by a local engine (worker subprocess), laid on "
                                "one mono timeline WAV through ffmpeg-skill (pad + join), validated through ffmpeg-skill/probe",
                 "inputs": ["cues (CUES_INPUT: .json, .srt, .vtt) or plain text (.txt, one utterance per line, back to back)",
-                           "the engine's built-in voice; a reference voice is refused until the consent gate (step 6)"],
-                "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox]",
-                         "[--voice <id>]", "[--translation-note <json>]", "[--seed 0]", "[--on-overflow fail|shift]",
+                           "the engine's built-in voice (voicevox: a style id, default 3); a reference voice is refused until "
+                           "the consent gate (step 6)"],
+                "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox|voicevox]",
+                         "[--voice <id>]", "[--accept-unverified-voice-terms]", "[--translation-note <json>]", "[--seed 0]",
+                         "[--on-overflow fail|shift]",
                          "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
                 "refused": {"--reference / --consent": "NOT_IMPLEMENTED until roadmap step 6 (consent gate, ADR-001)",
-                            "timed cues": "FFMPEG_SKILL_UNAVAILABLE while ffmpeg-skill/pad cannot take audio-only input (ADR-005)"},
+                            "timed cues": "FFMPEG_SKILL_UNAVAILABLE while ffmpeg-skill/pad cannot take audio-only input (ADR-005)",
+                            "a VOICEVOX character whose terms were not verified": "TERMS_UNVERIFIED unless "
+                                                                                  "--accept-unverified-voice-terms (ADR-006)"},
                 "schema": NARRATE_SCHEMA,
                 "limits": {"lines": MAX_LINES, "chars_per_line": MAX_LINE_CHARS, "duration_tolerance": "max(0.1 s, 1 %)"},
-                "output": "mono PCM WAV at the first clip's sample rate (Chatterbox: 24 kHz); one clip per line, each placed at "
+                "output": "mono PCM WAV at the first clip's sample rate (Chatterbox: 24 kHz; VOICEVOX: the outputSamplingRate "
+                          "of its audio_query, 24 kHz by default); one clip per line, each placed at "
                           "its cue start (cues) or back to back (text); the timeline lasts to the later of the last clip and the "
                           "last cue end"},
     "dub": {"description": "Dialogue replaced with translated speech fitted to each cue window, muxed through ffmpeg-skill",
@@ -68,6 +74,18 @@ def tools() -> list:
          "implemented": True, "description": "This contract", "argv": ["contract", "--json"]},
     ]
     return out
+
+
+def voice_terms() -> Dict[str, Any]:
+    """Which voices may be used by default (terms verified) and what happens to the others (ADR-006)."""
+    return {"voicevox": {
+        "verified": [{"character": v["character"], "speaker_uuid": uuid, "credit": v["credit"], "terms": v["terms"],
+                      "conditions": list(v["conditions"])} for uuid, v in VERIFIED_CHARACTERS.items()],
+        "default_voice": {"speaker": VOICEVOX_DEFAULT_STYLE, "character": "ずんだもん", "style": "ノーマル"},
+        "matched_by": "speaker_uuid and name from GET /speakers",
+        "unverified": "refused with TERMS_UNVERIFIED unless the caller passes --accept-unverified-voice-terms; the credit "
+                      "is then derived as 'VOICEVOX:<name>' and recorded with terms_verified: false",
+        "adr": "docs/decisions.md ADR-006"}}
 
 
 def contract() -> Dict[str, Any]:
@@ -115,11 +133,14 @@ def contract() -> Dict[str, Any]:
                                     "consent of that person (OS ADR-012); until roadmap step 6 verifies such a record, every op "
                                     "refuses a reference voice (NOT_IMPLEMENTED) before reading it, and so does every engine",
                    "credit": "an engine's credit (credit_required) is carried into the provenance and must appear in the "
-                             "published video's description or credits",
+                             "published video's description or credits; VOICEVOX credits are resolved per voice "
+                             "('VOICEVOX:<character>', with the speaker and the character) into each clip's provenance "
+                             "`credits` and the op's `obligations`",
+                   "voice_terms": voice_terms(),
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance, and "
                                 "Chatterbox's Perth mark is read back from every clip (a clip where it is not found is refused)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "voice", "text.sha256", "translation",
-                                  "watermark", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
+                                  "watermark", "credits", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
                        "per_clip": True,
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["dubbing", "<command>", "...", "--json"], "network": False, "shell": False,
