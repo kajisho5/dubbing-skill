@@ -74,7 +74,20 @@ def _human(doc: Dict[str, Any]) -> None:
         print(f"{doc['skill_id']} {doc['version']}: " + ", ".join(f"{p['id']} ({p['lifecycle']})" for p in doc["provides"]))
 
 
+def _utf8_streams() -> None:
+    """JSON (and the Japanese credits in it) always leaves as UTF-8, also on a Windows console or pipe whose default
+    encoding is a legacy code page. Streams without reconfigure() (a test's StringIO) are left alone."""
+    for stream in (sys.stdout, sys.stderr):
+        enc = (getattr(stream, "encoding", None) or "").lower().replace("-", "").replace("_", "")
+        if enc != "utf8" and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):  # pragma: no cover - a stream that cannot change encoding
+                pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    _utf8_streams()
     args = build_parser().parse_args(argv)
     as_json = bool(getattr(args, "json", False))
     try:
