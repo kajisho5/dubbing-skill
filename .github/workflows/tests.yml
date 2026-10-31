@@ -43,13 +43,21 @@ jobs:
     # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001): NARRATE,
     # DUB and AUDIO_DESCRIPTION run on the fake Chatterbox, VOICEVOX, Kokoro and Style-Bert-VITS2, the media through the
     # real ffmpeg-skill (probe, join, audio, cut, silence) on test videos made with FFmpeg's own sources. Nothing may skip here except the real-engine tests, which run in
-    # `engines` (Chatterbox) and `voicevox`.
+    # `engines` (Chatterbox) and `voicevox`. Run against ffmpeg-skill main and the 3.0.0 release pinned by commit (ADR-013).
+    name: integration (ffmpeg-skill ${{ matrix.ffmpeg_skill.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        ffmpeg_skill:
+          - {name: main, ref: main}
+          - {name: "3.0.0", ref: 1dc2f52013956daa1d97fd9d9d53c79b9305bc43}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: kajisho5/ffmpeg-skill
+          ref: ${{ matrix.ffmpeg_skill.ref }}
           path: vendor/ffmpeg-skill
       - uses: actions/checkout@v4
         with:

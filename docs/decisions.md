@@ -608,3 +608,26 @@ Roadmap step 9: SKILL.md, CI, and (on the agent side) an adapter. It is done whe
   4. Then run `dub` / `describe`.
   5. Carry `obligations` into the receipt.
   6. Never pass a reference without a consent record from the user.
+
+## ADR-013 ffmpeg-skill 3.0.0: its contract_version 2.0 is known; tempo and pad are still missing; CI also runs against 3.0.0
+
+**Context.** ffmpeg-skill 3.0.0 (`1dc2f52`) declares `contract_version` 2.0; 0.x–2.x declared 1.0. Against it,
+`doctor` warned that the number differed. 3.0 also drops Python 3.9 and FFmpeg 5.x and changes `cut.py`'s defaults:
+the edit list is kept on a stream copy, SDR HEVC is kept as HEVC, `--vfr-guard` defaults to `sampled`, and
+`precision` / `keyframe_snapped` change meaning. That meaning change is the reason for the 2.0 bump.
+
+**What reaches this skill.** Nothing. No tool or flag in `FLAGS_USED` was removed. `cut` is always called with
+`--accurate`, so every part is re-encoded: no stream copy, no edit list, no copied-part `precision`.
+ffmpeg-skill's 3.0.0 CHANGELOG adds no tool and no flag except probe's `timecode`. Two things stay true:
+- `pad` is still not `audio_only`, so timed cues remain blocked (ADR-005).
+- No tool changes the tempo of audio alone, so NARRATE / DUB still fit at tempo 1.0 (ADR-008).
+
+Both were checked against 3.0.0's `contract --json`. The README and the plan already say this; only the release
+they name (2.23.0 / 2.24.0) is older.
+
+**Decision.** `KNOWN_CONTRACT_VERSIONS = ("1.0", "2.0")`. Only a value outside those majors is a warning. The
+published contract does not change.
+
+**Python / FFmpeg / CI.** No job combined ffmpeg-skill with Python 3.9. The unit jobs (3.9 / 3.12) never run it.
+The integration job runs Python 3.12 on ubuntu-24.04 (FFmpeg 6.1), and becomes a matrix over ffmpeg-skill main and
+3.0.0 (pinned by commit). Python 3.9 stays supported by this skill.

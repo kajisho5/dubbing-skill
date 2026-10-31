@@ -425,7 +425,8 @@ class FfmpegSkillContractTests(unittest.TestCase):
         missing_tool = self.doc()
         missing_tool["tools"] = [t for t in missing_tool["tools"] if t["name"] != "loudness"]
         self.assertIn("'loudness' is missing", parse_contract(missing_tool, Path(".")).problems[0])
-        self.assertTrue(parse_contract(dict(self.doc(), contract_version="2.0"), Path(".")).warnings)
+        self.assertFalse(parse_contract(dict(self.doc(), contract_version="2.0"), Path(".")).warnings)   # ffmpeg-skill 3.x (ADR-013)
+        self.assertTrue(parse_contract(dict(self.doc(), contract_version="3.0"), Path(".")).warnings)
 
     def test_locate_explicit_dir_is_never_replaced(self):
         with self.assertRaises(DubbingError) as e:

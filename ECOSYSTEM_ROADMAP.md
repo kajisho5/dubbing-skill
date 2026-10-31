@@ -41,6 +41,7 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
   - Done when: licence isolation documented
 - [x] **9. SKILL.md, CI; (agent side) adapter** ([#11](https://github.com/kajisho5/dubbing-skill/pull/11), [docs/decisions.md](docs/decisions.md) ADR-012; skill side: `SKILL.md` checked against the CLI, CI asserts all three ops and the consent policy, real Chatterbox DUB and real VOICEVOX AUDIO_DESCRIPTION on test videos; agent side: handed off to video-production-agent with the contract changes listed in ADR-012)
   - Done when: agent plan or handoff
+- [x] **10. ffmpeg-skill 3.0.0** — its contract_version 2.0 read without a warning; CI integration also against 3.0.0; still no audio-only tempo / pad ([#PRNUM](https://github.com/kajisho5/dubbing-skill/pull/PRNUM), ADR-013)
 
 ## Boundaries
 

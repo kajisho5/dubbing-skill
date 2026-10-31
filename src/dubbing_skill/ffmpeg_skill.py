@@ -39,7 +39,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from .errors import DubbingError
 from .procs import TIMEOUT_EXIT, run_process_group
 
-SUPPORTED_CONTRACT_VERSION = "1.0"   # reported, not gated on (ffmpeg-skill kept "1.0" across 0.x-2.x)
+# contract_version values ffmpeg-skill declares: "1.0" (0.x-2.x) and "2.0" (3.x, whose bump changed only cut.py's
+# precision / keyframe_snapped meaning for copied parts -- this skill's cut always passes --accurate; ADR-013).
+# Reported, not gated on; only a value outside these majors is a warning. SUPPORTED_CONTRACT_VERSION is the oldest.
+KNOWN_CONTRACT_VERSIONS = ("1.0", "2.0")
+SUPPORTED_CONTRACT_VERSION = KNOWN_CONTRACT_VERSIONS[0]
 ENV_DIR_KEYS = ("DUBBING_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
 TOOLS_USED = ("probe", "join", "audio", "loudness", "cut")
 FLAGS_USED: Dict[str, Tuple[str, ...]] = {
@@ -116,8 +120,8 @@ def parse_contract(doc: Dict[str, Any], directory: Path) -> SkillInfo:
     tools = {t["name"]: t for t in doc.get("tools", []) if isinstance(t, dict) and "name" in t}
     problems: List[str] = []
     warnings: List[str] = []
-    if contract_version != "unknown" and contract_version.split(".")[0] != SUPPORTED_CONTRACT_VERSION.split(".")[0]:
-        warnings.append(f"ffmpeg-skill contract_version {contract_version} differs from {SUPPORTED_CONTRACT_VERSION}; "
+    if contract_version != "unknown" and contract_version.split(".")[0] not in {v.split(".")[0] for v in KNOWN_CONTRACT_VERSIONS}:
+        warnings.append(f"ffmpeg-skill contract_version {contract_version} is not one of {', '.join(KNOWN_CONTRACT_VERSIONS)}; "
                         "compatibility was decided by the tool / flag check, not by this number")
     for tool, flags in FLAGS_USED.items():
         spec = tools.get(tool)
