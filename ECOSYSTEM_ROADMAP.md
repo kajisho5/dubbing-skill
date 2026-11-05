@@ -45,6 +45,15 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
 - [ ] **11. Localise in one run: translate → dub → subtitles, speech rate fitted** — the chain as one plan: source cues (transcription, or transcription-skill step 8's script alignment) → subtitle-skill `translate` → DUB → the translated cues as a soft track through subtitle-skill `mux`, with the timing of all three kept to one cue list. Skill side: `dubbing fit --rate` measures each synthesised line and the voice's speaking rate, and reports per cue whether it fits at tempo ≤ `--max-tempo`; for each line that does not, it reports a length budget in the target language (characters, and morae for Japanese), so the caller can ask `translate` for a shorter line instead of speeding the voice up. Agent side (video-production-agent): run the chain, re-ask the translation once with the budget, and report what still does not fit. Rendering any tempo other than 1.0 still waits for audio-only tempo in ffmpeg-skill (Velisa ROADMAP, proposals). 参考：pyvideotrans（考え方のみ。コードは使わない）
   - Needs: subtitle-skill steps 5-6 (done); ffmpeg-skill audio-only tempo for tempo above 1.0
   - Done when: on an en→ja fixture every line either fits its cue or is reported with its budget; the dubbed video, its ja soft track and the cue list share the same times; the consent gate (step 6) still applies to a cloned voice
+- [ ] **12. Pronunciation dictionary for terms** — a per-project dictionary (term, reading, accent where the engine takes it) applied to every engine that accepts one (VOICEVOX user dictionary, phoneme hints elsewhere), and a check that lists the dictionary terms each line contains. Field review 2026-11-05 (Velisa ROADMAP, third round)
+  - なぜ要るか：医学用語・薬剤名・人名の読み間違いを、AI ナレーションで繰り返さない
+  - Done when: a fixture with three medical terms is read as the dictionary says (checked by transcription-skill on the output)
+- [ ] **13. One voice per channel or series** — a named voice profile (engine, voice or consented reference, speed, pitch, loudness target) reused across episodes and recorded in provenance, so every episode's narration sounds the same
+  - なぜ要るか：YouTube の連載や企業チャンネルで、回ごとに声の印象がぶれない
+  - Done when: two runs with the same profile and text give the same audio on a deterministic engine, and the profile id is in both receipts
+- [ ] **14. AI voice disclosure** — every output records that it is synthetic (engine, voice, consent record when cloned), checks the watermark where the engine writes one (Chatterbox Perth), and hands a disclosure line to publish-skill's metadata
+  - なぜ要るか：プラットフォームの AI 表記ルールと、声の権利の説明責任に対応できる
+  - Done when: a Chatterbox fixture's watermark is detected, and the disclosure reaches the publish plan
 
 ## Boundaries
 
