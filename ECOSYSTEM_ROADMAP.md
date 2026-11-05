@@ -19,7 +19,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Wiring
 
-ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --gain`, `--replace`) and cut (DUB, AUDIO_DESCRIPTION), silence `--list` (AUDIO_DESCRIPTION gaps). Expected: loudness; inputs from transcription and subtitle-skill.
+ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --gain`, `--replace`) and cut (DUB, AUDIO_DESCRIPTION), silence `--list` (AUDIO_DESCRIPTION gaps). Expected: loudness; inputs from transcription and subtitle-skill. Wired in the agent as `speech_dub` (video-production-agent#97, its ADR-085).
 
 ## Steps
 
@@ -42,10 +42,13 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
 - [x] **9. SKILL.md, CI; (agent side) adapter** ([#11](https://github.com/kajisho5/dubbing-skill/pull/11), [docs/decisions.md](docs/decisions.md) ADR-012; skill side: `SKILL.md` checked against the CLI, CI asserts all three ops and the consent policy, real Chatterbox DUB and real VOICEVOX AUDIO_DESCRIPTION on test videos; agent side: handed off to video-production-agent with the contract changes listed in ADR-012, wired there as SkillSpec `speech_dub` in [video-production-agent#97](https://github.com/kajisho5/video-production-agent/pull/97), its ADR-085)
   - Done when: agent plan or handoff
 - [x] **10. ffmpeg-skill 3.0.0** — its contract_version 2.0 read without a warning; CI integration also against 3.0.0; still no audio-only tempo / pad ([#12](https://github.com/kajisho5/dubbing-skill/pull/12), ADR-013)
+- [ ] **11. Localise in one run: translate → dub → subtitles, speech rate fitted** — the chain as one plan: source cues (transcription, or transcription-skill step 8's script alignment) → subtitle-skill `translate` → DUB → the translated cues as a soft track through subtitle-skill `mux`, with the timing of all three kept to one cue list. Skill side: `dubbing fit --rate` measures each synthesised line and the voice's speaking rate, and reports per cue whether it fits at tempo ≤ `--max-tempo`; for each line that does not, it reports a length budget in the target language (characters, and morae for Japanese), so the caller can ask `translate` for a shorter line instead of speeding the voice up. Agent side (video-production-agent): run the chain, re-ask the translation once with the budget, and report what still does not fit. Rendering any tempo other than 1.0 still waits for audio-only tempo in ffmpeg-skill (Velisa ROADMAP, proposals). 参考：pyvideotrans（考え方のみ。コードは使わない）
+  - Needs: subtitle-skill steps 5-6 (done); ffmpeg-skill audio-only tempo for tempo above 1.0
+  - Done when: on an en→ja fixture every line either fits its cue or is reported with its budget; the dubbed video, its ja soft track and the cue list share the same times; the consent gate (step 6) still applies to a cloned voice
 
 ## Boundaries
 
-Depends on subtitle-skill translation (not implemented).
+Translation is subtitle-skill's (`translate`, its steps 4-5, done); this skill takes translated cues as input (ADR-003) and never translates.
 
 ---
-Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (42 tools, treated as complete). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
+Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
