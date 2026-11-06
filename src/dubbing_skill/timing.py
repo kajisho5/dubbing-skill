@@ -24,7 +24,13 @@ last one up to the last cue's end, which is what ffmpeg-skill/pad would add when
 
 Rendering the plan needs an audio-only tempo change and audio-only pad in ffmpeg-skill. ffmpeg-skill 2.23.1 has
 neither (fit and speedramp change tempo with atempo but declare audio_only: false and refuse an input without video;
-pad likewise), so the plan is returned with `render.done: false` and the reason (ADR-007)."""
+pad likewise), so the plan is returned with `render.done: false` and the reason (ADR-007). ffmpeg-skill 3.1.7 still
+has neither.
+
+With `--rate` (roadmap step 11, ADR-014) the plan also carries `rate` (rate.py): each line's length in the target
+language (characters, and morae for Japanese), the voice's speaking rate measured on these clips, and for each line
+that does not fit at a tempo up to --max-tempo its length budget, at --max-tempo and at tempo 1.0, so the caller can
+ask the translator for a shorter line instead of speeding the voice up. Every unfit entry then carries its budget."""
 from __future__ import annotations
 
 import math
@@ -36,6 +42,7 @@ from . import SKILL_ID, __version__
 from .cues import Script, parse_script
 from .errors import DubbingError
 from .ops import _usable_skill
+from .rate import rate_report
 
 FIT_SCHEMA = f"{SKILL_ID}/fit@1"
 DEFAULT_MAX_TEMPO = 1.25          # 25 % faster at most: past that, speech sounds rushed (ADR-007)
@@ -70,6 +77,7 @@ class FitRequest:
     on_unfit: str = "fail"
     timeout: float = 120.0
     ffmpeg_skill_dir: Optional[str] = None
+    rate: bool = False            # add the speech rate and the length budgets (ADR-014); needs `lang`
 
 
 def _r(x: float) -> float:
@@ -204,6 +212,9 @@ def fit(req: FitRequest, skill: Optional[Any] = None) -> Dict[str, Any]:
         raise DubbingError("INVALID_ARGUMENT", f"--on-unfit must be one of {list(UNFIT_POLICIES)}", {"on_unfit": req.on_unfit})
     if isinstance(req.timeout, bool) or not isinstance(req.timeout, (int, float)) or req.timeout <= 0:
         raise DubbingError("INVALID_ARGUMENT", "--timeout must be > 0", {"timeout": req.timeout})
+    if req.rate and not (isinstance(req.lang, str) and req.lang.strip()):
+        raise DubbingError("INVALID_ARGUMENT", "--rate needs --lang: the budget is counted in the cues' language (characters, "
+                           "and morae for ja)", {"lang": req.lang})
     src = os.path.abspath(req.cues_path)
     script = parse_script(src, req.lang or "und")
     slots = slots_for(script, float(req.max_overrun))
@@ -228,6 +239,8 @@ def fit(req: FitRequest, skill: Optional[Any] = None) -> Dict[str, Any]:
                              "pad": "ffmpeg-skill/pad --start/--end on audio-only input, declared audio_only"}},
         "warnings": [],
     }
+    if req.rate:
+        attach_rate(result, script, str(req.lang), float(req.max_tempo))
     if plan["unfit"]:
         if req.on_unfit == "fail":
             raise DubbingError("TIMING_OVERFLOW", f"{len(plan['unfit'])} line(s) cannot fit their cue window within the limits "
@@ -238,3 +251,14 @@ def fit(req: FitRequest, skill: Optional[Any] = None) -> Dict[str, Any]:
     if plan["summary"]["overruns"]:
         result["warnings"].append(f"line(s) {plan['summary']['overruns']} run past their cue end (within --max-overrun)")
     return result
+
+
+def attach_rate(doc: Dict[str, Any], script: Script, lang: str, max_tempo: float) -> Dict[str, Any]:
+    """Add the speech rate and the length budgets (rate.py, ADR-014) to a fit plan `doc` (its `lines` and `unfit`), in
+    place: `doc["rate"]`, and each unfit entry's `budget`. Returns the rate block."""
+    rate = rate_report(script.lines, doc["lines"], lang, max_tempo)
+    by_index = {d["index"]: d for d in rate["lines"]}
+    for u in doc["unfit"]:
+        u["budget"] = by_index[u["index"]]["budget"]
+    doc["rate"] = rate
+    return rate

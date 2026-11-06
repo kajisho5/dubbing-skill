@@ -26,6 +26,10 @@ path that needs it is refused with FFMPEG_SKILL_UNAVAILABLE before any work, and
             audio_only: false, so timed cues are refused today (ADR-005)
   silence   --list --threshold --min-silence: the programme's silent stretches, without writing anything; the gaps
             AUDIO_DESCRIPTION --detect-gaps places descriptions in (ADR-010). Declared audio_only by ffmpeg-skill 2.24.0
+
+Not used, only looked for (`audio_tempo`): a tool declared audio_only that takes a tempo flag (TEMPO_FLAGS). No such
+tool exists up to ffmpeg-skill 3.1.7 (fit and speedramp change tempo with atempo but need a video stream), so DUB
+renders at tempo 1.0 and doctor says so (ADR-007, ADR-014). Finding one does not change that: using it is a change here.
 """
 from __future__ import annotations
 
@@ -58,6 +62,7 @@ OPTIONAL_TOOLS: Dict[str, Tuple[str, ...]] = {
     "pad": ("input", "output", "start", "end", "json"),
     "silence": ("input", "list", "threshold", "min_silence", "json"),
 }
+TEMPO_FLAGS = ("tempo", "atempo", "speed")
 OPTIONAL_USE = {"pad": "silence before / after a clip, to place timed cues on the NARRATE timeline (ADR-005)",
                 "silence": "the programme's quiet stretches, as the gaps for AUDIO_DESCRIPTION --detect-gaps (ADR-010)"}
 
@@ -92,6 +97,18 @@ class SkillInfo:
             problem = self.optional_problem(tool) if self.tools else "contract not read"
             out[tool] = {"usable": problem is None, "for": OPTIONAL_USE[tool], "problem": problem}
         return out
+
+    def audio_tempo(self) -> Dict[str, Any]:
+        """Whether this checkout declares a tempo change on audio alone (a tool declared audio_only with a TEMPO_FLAGS
+        flag). Looked for only: DUB renders at tempo 1.0 either way until this skill uses such a tool (ADR-014)."""
+        found = []
+        for name, spec in sorted(self.tools.items()):
+            props = (spec.get("input_schema") or {}).get("properties") or {}
+            if spec.get("audio_only") is True and isinstance(props, dict) and any(f in props for f in TEMPO_FLAGS):
+                found.append(name)
+        problem = None if found else ("no audio-only tempo change (no tool declared audio_only takes "
+                                      f"{list(TEMPO_FLAGS)}; fit and speedramp need a video stream)")
+        return {"available": bool(found), "tools": found, "used": False, "problem": problem}
 
     def takes_flag(self, tool: str, flag: str) -> bool:
         props = ((self.tools.get(tool) or {}).get("input_schema") or {}).get("properties") or {}

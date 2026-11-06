@@ -40,6 +40,7 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
     warnings: List[str] = []
     cue_placement: Optional[str] = "ffmpeg-skill not usable"
     gap_detection: Optional[str] = "ffmpeg-skill not usable"
+    audio_tempo: Dict[str, Any] = {"available": False, "tools": [], "used": False, "problem": "ffmpeg-skill not usable"}
     py_ok = sys.version_info >= (3, 9)
     checks["python"] = {"status": "OK" if py_ok else "MISSING", "version": platform.python_version(), "platform": platform.system(),
                         "install": None if py_ok else "Python >= 3.9"}
@@ -55,6 +56,13 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         if info.supported:
             cue_placement = info.optional_problem("pad")
             gap_detection = info.optional_problem("silence")
+            audio_tempo = info.audio_tempo()
+            if audio_tempo["problem"]:
+                warnings.append(f"ffmpeg-skill: {audio_tempo['problem']}: DUB renders every line at tempo 1.0, and fit --rate "
+                                "gives each line that needs more its budget at tempo 1.0 (ADR-007, ADR-014)")
+            else:
+                warnings.append(f"ffmpeg-skill: {audio_tempo['tools']} declare an audio-only tempo change, which this version "
+                                "does not use yet: DUB still renders at tempo 1.0 (ADR-014)")
             if gap_detection:
                 warnings.append(f"ffmpeg-skill: describe --detect-gaps is refused: {gap_detection} (--gaps works; ADR-010)")
             if cue_placement:
@@ -96,6 +104,10 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         "detect_gaps": {"ready": bool(ops["audio_description"]["ready"] and gap_detection is None),
                         "needs": "ffmpeg-skill/silence --list on audio (ADR-010)", "problem": gap_detection},
     }
+    ops["dub"]["tempo"] = {"rendered": 1.0, "above_1": {"ready": False, "needs": "an audio-only tempo change in ffmpeg-skill, "
+                                                    "used by this skill (ADR-007, ADR-014)", "ffmpeg_skill": audio_tempo},
+                           "budgets": "fit --rate and DUB give each line that does not fit at tempo 1.0 its length budget "
+                                      "(characters, morae for ja) instead (ADR-014)"}
     checks["operations"] = ops
     missing_engines = sorted(eid for eid, e in engines.items() if e["status"] != OK)
     status = "fail" if problems else ("degraded" if missing_engines else "ok")

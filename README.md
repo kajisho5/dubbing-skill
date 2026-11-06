@@ -40,6 +40,7 @@ dubbing narrate script.txt --lang ja -o narration.wav --engine voicevox --json  
 dubbing dub talk.mp4 en.srt --lang en -o talk.en.mp4 --source-cues ja.srt --json   # dialogue replaced, ducked over the programme
 dubbing describe talk.mp4 desc.json --lang ja -o talk.ad.mp4 --detect-gaps --json   # audio description inside the quiet stretches
 dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and silence each line needs; lines that cannot fit
+dubbing fit ja.srt line0.wav line1.wav --lang ja --rate --json   # plus the voice's rate and a length budget per unfit line
 ```
 
 ## NARRATE
@@ -92,7 +93,8 @@ dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and s
   - Lines are never slowed down.
 - **Silence.** `lead` is the silence before each placed line, and `tail` is the silence after the last one up to the last cue's end.
 - **Policy.** An unfit line fails the call with `TIMING_OVERFLOW` (exit 4), with the plan in `error.details.plan`. `--on-unfit report` returns the plan with `summary.all_fit: false` instead.
-- **Rendering** needs an audio-only tempo change and an audio-only pad in ffmpeg-skill, which 2.24.0 does not have. The plan says so under `render`. DUB applies the plan at tempo 1.0 and needs no pad (ADR-008). NARRATE and DUB apply tempo once ffmpeg-skill can.
+- **Speech rate and budgets** (`--rate --lang ja`, roadmap step 11, [ADR-014](docs/decisions.md)). Each line's length in the cues' language (spoken characters; morae for Japanese, kana exact, kanji, digits and Latin letters estimated), the voice's speaking rate measured on the clips themselves (the engine's overhead per line, then seconds per character or mora), and, for each line that does not fit, a length budget: the most characters (and morae) that would fit, at `--max-tempo` (`budget`) and at tempo 1.0 (`budget_at_tempo_1`). The caller asks the translator (subtitle-skill `translate`) for a line within it instead of speeding the voice up. DUB reports the same budget, at tempo 1.0, for every line it cannot place (`fit.unfit[].budget`, also in `TIMING_OVERFLOW`'s details).
+- **Rendering** needs an audio-only tempo change and an audio-only pad in ffmpeg-skill, which it does not have up to 3.1.7. The plan says so under `render`. DUB applies the plan at tempo 1.0 and needs no pad (ADR-008). NARRATE and DUB apply tempo once ffmpeg-skill can.
 
 ## Engines (optional, [ADR-001](docs/decisions.md))
 
@@ -162,7 +164,7 @@ Unit tests need no engine, no weights, no FFmpeg and no network:
 - Timing fit is tested as pure decisions (exact fit, speed-up, over the limit, padding, empty and zero-length slots, 2000 lines) and on WAVs with non-ASCII names.
 - A WAV-only stand-in replaces ffmpeg-skill.
 
-The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join, timing fit through its probe, and DUB on a test video made with FFmpeg's own test sources, through probe, audio, cut and join (audio and picture must last as long as each other). The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files. The real-VOICEVOX tests run only with `DUBBING_REAL_VOICEVOX=1`, and skip when the app is absent. CI's `voicevox` job sets it, after starting the official CPU image 0.26.0 (pinned by digest) on 127.0.0.1:50021. The real engines also run an op on a test video: the `engines` job dubs one line with Chatterbox, and the `voicevox` job adds an audio description inside a detected gap ([ADR-012](docs/decisions.md)).
+The integration tests need a real ffmpeg-skill checkout (`DUBBING_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. They run NARRATE through ffmpeg-skill's probe and join, timing fit through its probe, and DUB on a test video made with FFmpeg's own test sources, through probe, audio, cut and join (audio and picture must last as long as each other). The localise chain (roadmap step 11, [ADR-014](docs/decisions.md)) runs when a subtitle-skill checkout is there too (`DUBBING_SUBTITLE_SKILL_DIR` or `../subtitle-skill`): its `translate` (engine memory, no model) on an en→ja fixture, DUB with the budgets, one re-asked translation, DUB again and its `mux`; the ja soft track read back from the file has the cue list's times. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present. The real-Chatterbox tests run only with `DUBBING_REAL_CHATTERBOX=1`. CI's `engines` job sets it, after installing chatterbox-tts 0.1.7 in its own venv and fetching the pinned checkpoint files. The real-VOICEVOX tests run only with `DUBBING_REAL_VOICEVOX=1`, and skip when the app is absent. CI's `voicevox` job sets it, after starting the official CPU image 0.26.0 (pinned by digest) on 127.0.0.1:50021. The real engines also run an op on a test video: the `engines` job dubs one line with Chatterbox, and the `voicevox` job adds an audio description inside a detected gap ([ADR-012](docs/decisions.md)).
 
 ## Licence
 

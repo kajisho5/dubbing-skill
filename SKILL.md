@@ -31,6 +31,8 @@ Run `dubbing <command>` (installed by `pip install -e .`; stdlib only), or `pyth
 | "add audio description" | `dubbing describe talk.mp4 desc.json --lang ja -o talk.ad.mp4 --detect-gaps --json` |
 | "here are the pauses to use" | `dubbing describe talk.mp4 desc.json --lang ja -o out.mp4 --gaps gaps.json --json` |
 | "will these lines fit their cues?" | `dubbing fit cues.json line0.wav line1.wav --on-unfit report --json` (writes nothing) |
+| "how short must the Japanese be to fit?" | `dubbing fit ja.srt line0.wav line1.wav --lang ja --rate --on-unfit report --json`: `rate.lines[].budget` (characters, morae) per line that does not fit |
+| "localise this talk into Japanese" (translate → dub → subtitles) | subtitle-skill `translate` (source cues → `ja.srt`) → `dubbing dub talk.mp4 ja.srt --lang ja --source-cues en.srt -o talk.ja.mp4 --on-unfit keep --json` → for each line in `kept_original`, ask `translate` once more for a line within `fit.unfit[].budget` and dub again → subtitle-skill `mux` the ja cues into the dubbed video. One cue list throughout: never re-time the translation |
 | "which engines can I use here" | `dubbing engines --json` |
 | "what can this skill do" (machine-readable) | `dubbing contract --json` (alias `skill --json`) |
 
@@ -62,6 +64,7 @@ Report numbers from the output document, not from memory.
 
 - `TIMING_OVERFLOW` on DUB means a translated line is longer than its segment allows. Tempo is 1.0, because ffmpeg-skill cannot change the tempo of audio alone yet. Shorten the line, give `--max-overrun`, or `--on-unfit keep`. Do not cut the clip yourself.
 - `dubbing fit` may plan a speed-up (`status: tempo`). DUB and AUDIO_DESCRIPTION do not apply it yet. Their `fit.render` says why.
+- A budget (`fit.unfit[].budget`, `rate.lines[].budget`) is a target for the translator, not a cut: never trim the text or the clip to it yourself. In Japanese, `morae` of kanji, digits and Latin letters are estimates (`morae_exact: false`); prefer `chars` unless the line is all kana. `budget_at_tempo_1` is what DUB can render today; `budget` at `--max-tempo` needs a tempo ffmpeg-skill cannot apply to audio yet (`doctor`: `operations.dub.tempo`).
 - NARRATE with timed cues (`.json` / `.srt` / `.vtt`) needs ffmpeg-skill's pad on audio alone, which ffmpeg-skill does not have yet (`FFMPEG_SKILL_UNAVAILABLE`). Plain text works. DUB and AUDIO_DESCRIPTION do not need pad.
 - A description that starts outside every gap is refused (`INVALID_ARGUMENT`, `details.outside`). Move its start into a gap. It is never moved for you.
 - `--detect-gaps` finds *quiet* stretches (ffmpeg-skill/silence at `--silence-threshold`, default -35 dBFS). A noisy room has none. Pass speech-free spans from transcription-skill as `--gaps` instead.

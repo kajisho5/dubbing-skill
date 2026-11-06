@@ -2,6 +2,13 @@
 
 ## 0.1.0 - unreleased
 
+Localise in one run: translate → dub → subtitles, speech rate fitted (roadmap step 11, ADR-014).
+
+- `dubbing fit --rate --lang <lang>`: each line's length in the target language (spoken characters; morae for Japanese, kana exact, kanji / digits / Latin letters estimated), the voice's speaking rate measured on the clips (overhead + seconds per unit), and for each line that does not fit, a length budget at `--max-tempo` and at tempo 1.0. Unfit entries and `TIMING_OVERFLOW` details carry the budget.
+- DUB reports the same budget at tempo 1.0 for every line it cannot place (`fit.rate`, `fit.unfit[].budget`), so one run with `--on-unfit keep` tells the caller which lines to re-ask from subtitle-skill `translate`, and how short.
+- `doctor`: `operations.dub.tempo` says DUB renders at tempo 1.0 and whether ffmpeg-skill declares an audio-only tempo change (it does not, up to 3.1.7).
+- Tests: the en→ja chain through the real subtitle-skill `translate` and `mux`; the ja soft track read back with the cue list's times. CI checks subtitle-skill out in the integration, engines and voicevox jobs.
+
 ffmpeg-skill 3.0.0 (ADR-013).
 
 - ffmpeg-skill 3.x declares `contract_version` 2.0; it is read like 1.0, with no warning. Every tool and flag this skill uses is unchanged. Its `cut` calls always pass `--accurate`, so 3.0's new `cut.py` defaults do not reach it. 3.0.0 still has no audio-only tempo change and no audio-only `pad`, so the timed-cue and tempo limits stand. The CI integration job also runs against 3.0.0, pinned by commit.
