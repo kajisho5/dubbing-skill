@@ -17,6 +17,7 @@ from .describe import (DEFAULT_MIN_GAP, DEFAULT_SILENCE_THRESHOLD, DESCRIBE_SCHE
 from .dub import ALIGN_TOLERANCE, DUB_SCHEMA, DUB_TEMPO, TEMPO_GAP
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, MAX_DUCK_DB, MAX_VOICE_GAIN_DB
 from .ops import NARRATE_SCHEMA
+from .profile import LOUDNESS_RANGE, PITCH_RANGE, SPEED_RANGE, VOICE_PROFILE_SCHEMA
 from .pronunciation import METHODS as PRONUNCIATION_METHODS, PRONUNCIATION_SCHEMA, TERMS_SCHEMA
 from .provenance import ENGINE_FIELDS
 from .rate import DIGIT_MORAE, KANJI_MORAE, LATIN_MORAE, MORA_LANGS, RENDER_TEMPO
@@ -55,6 +56,24 @@ PRONUNCIATION_INPUT = {
               "the cue text is never changed (its hash stays in the provenance; the spoken text's hash is added)",
     "adr": "docs/decisions.md ADR-015",
 }
+# The voice profile every op takes (profile.py, roadmap step 13, ADR-016).
+VOICE_PROFILE_INPUT = {
+    "schema": VOICE_PROFILE_SCHEMA,
+    "format": "JSON file {schema, id, name?, engine, voice?, reference?, consent?, lang?, speed?, pitch?, loudness_target?, seed?}",
+    "fields": {"id": "a slug, the profile's name in every receipt", "engine": "the engine id", "voice": "the engine's voice",
+               "reference": "a reference voice, relative to the profile, only with `consent` (CONSENT_RECORD, ADR-009)",
+               "lang": "optional BCP-47 tag(s) the profile is for",
+               "speed": f"{SPEED_RANGE[0]:g} to {SPEED_RANGE[1]:g}, engines with a speed control",
+               "pitch": f"engine-native ({PITCH_RANGE[0]:g} to {PITCH_RANGE[1]:g}, VOICEVOX pitchScale), engines with a pitch control",
+               "loudness_target": f"LUFS ({LOUDNESS_RANGE[0]:g} to {LOUDNESS_RANGE[1]:g}): NARRATE's timeline through "
+                                  "ffmpeg-skill/loudness; recorded by DUB and AUDIO_DESCRIPTION (their level is the mix's)",
+               "seed": "the sampling seed"},
+    "flag": "--profile <profile.json> (narrate, dub, describe)",
+    "conflicts": "a flag that says otherwise (--engine, --voice, --reference, --consent, --seed) is INVALID_ARGUMENT",
+    "result": "voice_profile {id, name, sha256, engine, voice, reference_sha256, speed, pitch, loudness_target, seed}, in the "
+              "result and in every provenance",
+    "adr": "docs/decisions.md ADR-016",
+}
 # What a consent record must hold (consent.py, ADR-009). Every field is checked; any problem is CONSENT_REQUIRED.
 CONSENT_RECORD = {
     "schema": CONSENT_SCHEMA,
@@ -82,7 +101,7 @@ _OP_TOOLS = {
                            "the engine's built-in voice (voicevox: a style id, default 3), or a reference voice (--reference, "
                            "chatterbox) with its owner's consent record (--consent, CONSENT_RECORD, ADR-009)"],
                 "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox|voicevox]",
-                         "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--accept-unverified-voice-terms]", "[--pronunciation <dict.json>]", "[--translation-note <json>]", "[--seed 0]",
+                         "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--accept-unverified-voice-terms]", "[--profile <profile.json>]", "[--pronunciation <dict.json>]", "[--translation-note <json>]", "[--seed 0]",
                          "[--on-overflow fail|shift]",
                          "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
                 "refused": {"--reference without a consent record that checks out": "CONSENT_REQUIRED (ADR-009); no flag skips it",
@@ -110,8 +129,8 @@ _OP_TOOLS = {
                      "[--reference <voice.wav> --consent <consent.json>]", "[--speaker-reference <speaker>=<voice.wav>]...",
                      "[--speaker-consent <speaker>=<consent.json>]...",
                      "[--audio-stream 0]", f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|keep]",
-                     f"[--duck {DEFAULT_DUCK_DB:g}]", f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--pronunciation <dict.json>]",
-                     "[--translation-note <json>]",
+                     f"[--duck {DEFAULT_DUCK_DB:g}]", f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--profile <profile.json>]",
+                     "[--pronunciation <dict.json>]", "[--translation-note <json>]",
                      "[--seed 0]", "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
             "refused": {"a reference voice without a consent record that checks out": "CONSENT_REQUIRED (ADR-009); no flag skips it",
                         "plain text": "INVALID_ARGUMENT: each line replaces the dialogue of its segment, so cues are needed",
@@ -143,7 +162,7 @@ _OP_TOOLS = {
                  f"[--silence-threshold {DEFAULT_SILENCE_THRESHOLD:g}]", "[--engine chatterbox|voicevox|kokoro|style_bert_vits2]",
                  "[--voice <id>]", "[--accept-unverified-voice-terms]", "[--reference <voice.wav> --consent <consent.json>]",
                  "[--audio-stream 0]", "[--on-unfit fail|skip]", f"[--duck {DEFAULT_DUCK_DB:g}]",
-                 f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--pronunciation <dict.json>]", "[--seed 0]", "[--timeout 3600]",
+                 f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--profile <profile.json>]", "[--pronunciation <dict.json>]", "[--seed 0]", "[--timeout 3600]",
                  "[--overwrite]",
                  "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
         "refused": {"a description that starts outside every gap": "INVALID_ARGUMENT, before the engine runs",
@@ -254,7 +273,7 @@ def contract() -> Dict[str, Any]:
         "provides": [{"id": CAPABILITY_IDS[op], "lifecycle": "EXPERIMENTAL" if IMPLEMENTED_OPS[op] else "PROPOSED",
                       "tool_id": f"{SKILL_ID}/{op.replace('_', '-')}"} for op in CAPABILITY_IDS],
         "dependencies": deps,
-        "inputs": {"cues": CUES_INPUT, "pronunciation": PRONUNCIATION_INPUT, "translation": dict(TRANSLATION, decided_in="subtitle-skill (MT engine ADR, open)")},
+        "inputs": {"cues": CUES_INPUT, "pronunciation": PRONUNCIATION_INPUT, "voice_profile": VOICE_PROFILE_INPUT, "translation": dict(TRANSLATION, decided_in="subtitle-skill (MT engine ADR, open)")},
         "not_provided": ["translation / machine translation of the script (caller input, ADR-003; subtitle-skill owns 字幕翻訳)",
                          "transcription (transcription-skill)", "speaker diarization (diarization-skill)",
                          "subtitle files and cue shaping (subtitle-skill)",
@@ -283,7 +302,7 @@ def contract() -> Dict[str, Any]:
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance, and "
                                 "Chatterbox's Perth mark is read back from every clip (a clip where it is not found is refused)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "voice", "text.sha256", "translation",
-                                  "watermark", "credits", "consent", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
+                                  "watermark", "credits", "consent", "voice_profile", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
                        "per_clip": True,
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["dubbing", "<command>", "...", "--json"], "network": False, "shell": False,

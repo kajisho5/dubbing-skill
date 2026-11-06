@@ -59,6 +59,7 @@ SPEC = EngineSpec(
     credit_required=False,
     watermark=None,
     pronunciation="phoneme_hint",
+    controls=("speed",),
     languages=tuple(LANG_CODES),
     japanese="weak",
     voice_cloning=False,

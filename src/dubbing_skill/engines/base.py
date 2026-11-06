@@ -58,6 +58,7 @@ class EngineSpec:
     deterministic: bool = False               # neural TTS samples; a fixed seed is recorded, not a bit-exact promise
     pronunciation: str = "respell"            # how the pronunciation dictionary reaches it (pronunciation.py, ADR-015):
                                               # "user_dictionary" | "phoneme_hint" | "respell"
+    controls: Tuple[str, ...] = ()            # voice controls a request may set (a voice profile, ADR-016): "speed", "pitch"
     reference_kind: str = "audio"             # what a reference voice is: "audio" (a clip, probed through ffmpeg-skill) or
                                               # "model" (a voice model trained on the person, Style-Bert-VITS2, ADR-011)
 
@@ -160,7 +161,23 @@ class Engine:
         if req.lang not in self.spec.languages:
             raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} does not speak {req.lang!r}",
                                {"engine": self.id, "lang": req.lang, "languages": list(self.spec.languages)})
+        self.check_controls(req)
         self.check_consent(req)
+
+    def check_controls(self, req: EngineRequest) -> None:
+        """A speed or pitch (from a voice profile, ADR-016) only for an engine that has that control; a neutral value
+        (speed 1.0, pitch 0.0) is accepted everywhere."""
+        params = req.params if isinstance(req.params, dict) else {}
+        for key, neutral in (("speed", 1.0), ("pitch", 0.0)):
+            value = params.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise DubbingError("INVALID_ARGUMENT", f"{key} must be a number", {"engine": self.id, key: value})
+            if key not in self.spec.controls and float(value) != neutral:
+                raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} has no {key} control; its controls: "
+                                   f"{list(self.spec.controls) or 'none'} (leave {key} out of the voice profile)",
+                                   {"engine": self.id, "control": key, "value": value, "controls": list(self.spec.controls)})
 
     def check_consent(self, req: EngineRequest) -> Optional[Dict[str, Any]]:
         """The verified consent summary for a request with a reference voice, None without one. Verified once per engine

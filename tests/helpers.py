@@ -393,6 +393,19 @@ class WaveSkill:
         return {"status": "completed"}
 
 
+    def loudness(self, input_path: str, output: str, lufs: float, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """As ffmpeg-skill/loudness --lufs: one gain for the whole file, so its RMS level (dBFS, standing in for LUFS)
+        is `lufs`; the rate and length kept."""
+        import math
+        self.calls.append(("loudness", (os.path.basename(input_path), round(lufs, 1))))
+        rate, samples = wav_samples(input_path)
+        rms = math.sqrt(sum(v * v for v in samples) / max(1, len(samples))) / 32768.0
+        gain = 10 ** (lufs / 20.0) / rms if rms > 0 else 1.0
+        out = [max(-32768, min(32767, int(round(v * gain)))) for v in samples]
+        _write16(output, out, rate)
+        peak = max(1, max(abs(v) for v in out)) / 32768.0
+        return {"status": "completed", "result": {"input_i": f"{lufs:.2f}", "input_tp": f"{20 * math.log10(peak):.2f}"}}
+
     def silences(self, input_path: str, threshold_db: float, min_silence: float, timeout: Optional[float] = None) -> List[List[float]]:
         """As ffmpeg-skill/silence --list: stretches at least `min_silence` long whose samples stay under the threshold."""
         self.calls.append(("silences", (os.path.basename(input_path), threshold_db, min_silence)))

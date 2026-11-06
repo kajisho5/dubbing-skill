@@ -29,6 +29,7 @@ from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, 
                      watermark_summary)
 from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, not_an_output, select_engine, unique_consents,
                   unique_credits, validate_clip, voice_request_fields)
+from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
@@ -71,6 +72,7 @@ class DescribeRequest:
     ffmpeg_skill_dir: Optional[str] = None
     offline: bool = False
     pronunciation_path: Optional[str] = None  # a dubbing/pronunciation@1 dictionary (ADR-015)
+    profile_path: Optional[str] = None        # a dubbing/voice-profile@1 voice profile (ADR-016)
 
 
 def _number_in(value: Any, lo: float, hi: float, flag: str) -> None:
@@ -176,10 +178,11 @@ def place_in_gaps(script: Script, gaps: Sequence[Dict[str, float]]) -> List[Slot
 def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     """AUDIO_DESCRIPTION: the descriptions at `req.descriptions_path` spoken inside the programme's gaps, over its
     ducked sound, written to `req.output_path`."""
-    reference, voice_params = voice_request_fields(req.reference_path, req.consent_path)
     _check_numbers(req)
+    req, profile = with_profile(req)
+    reference, voice_params = voice_request_fields(req.reference_path, req.consent_path)
     side = [req.descriptions_path] + ([req.gaps_path] if req.gaps_path else []) + \
-        ([req.pronunciation_path] if req.pronunciation_path else [])
+        ([req.pronunciation_path] if req.pronunciation_path else []) + ([req.profile_path] if req.profile_path else [])
     src, dst, kind = check_media_paths(req.input_path, side, req.output_path, req.overwrite)
     not_an_output(dst, req.reference_path, req.consent_path)
     script = parse_script(os.path.abspath(req.descriptions_path), req.lang)
@@ -190,7 +193,7 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
     if gaps is not None:
         place_in_gaps(script, gaps)                # refused here, before the engine and before any media work
     engine, report = select_engine("audio_description", req.engine, req.offline)
-    params: Dict[str, Any] = dict(voice_params, seed=req.seed)
+    params: Dict[str, Any] = dict(voice_params, seed=req.seed, **(profile.engine_params() if profile else {}))
     if req.accept_unverified_terms:
         params["accept_unverified_terms"] = True
     pron = prepare_pronunciation(req.pronunciation_path, engine, req.lang, [line.text for line in script.lines])
@@ -266,6 +269,7 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         first = results[0]
         engine_doc = dict(report, version=first.engine_version, model=first.model)
         decisions = {d["index"]: d for d in plan["lines"]}
+        voice_profile = profile_receipt(profile, loudness="recorded, not applied: the level is the mix's (--voice-gain)")
         clips = []
         for line, r, res, facts, slot in zip(script.lines, reqs, results, clip_facts, slots):
             a = facts["audio"]
@@ -284,7 +288,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
                                                          output_path=r.output_path, parameters=parameters,
                                                          voice=res.extra.get("voice") or req.voice, translation=req.translation_note,
                                                          ffmpeg_skill=info.to_dict(), watermark=res.extra.get("watermark"),
-                                                         credits=clip_credits(engine, res), consent=res.extra.get("consent"))})
+                                                         credits=clip_credits(engine, res), consent=res.extra.get("consent"),
+                                                         voice_profile=voice_profile)})
         placed_clips = [c for c in clips if c["placed"]]
         watermark = watermark_summary(engine.spec.watermark, [c["provenance"]["watermark"] for c in placed_clips])
         credits = unique_credits(c["provenance"]["credits"] for c in placed_clips)
@@ -301,7 +306,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         provenance = build_provenance(op="audio_description", engine=engine_doc, text=full_text, output_path=final,
                                       parameters=parameters, voice=first.extra.get("voice") or req.voice,
                                       translation=req.translation_note, ffmpeg_skill=info.to_dict(), watermark=watermark,
-                                      credits=credits, consent=unique_consents(c["provenance"]["consent"] for c in placed_clips))
+                                      credits=credits, consent=unique_consents(c["provenance"]["consent"] for c in placed_clips),
+                                      voice_profile=voice_profile)
         _place(final, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -339,6 +345,7 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
                 "channels": channels},
         "clips": clips,
         "pronunciation": pronunciation,
+        "voice_profile": voice_profile,
         "skipped": [u["index"] for u in plan["unfit"]],
         "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
                         "credits": credits, "watermark": watermark},

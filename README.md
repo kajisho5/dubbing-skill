@@ -113,6 +113,20 @@ a `dubbing/pronunciation@1` JSON file, and given to `narrate`, `dub` or `describ
 - Each engine takes it its own way: **VOICEVOX** through its user dictionary (each word added for the run and removed after it; the engine's own reading of each line is recorded and every term is checked against it), **Kokoro** as inline phonemes for English entries with `ipa`, and **Chatterbox** and **Style-Bert-VITS2** by reading the term's respelling. The cue text itself is never changed.
 - `dubbing terms script.txt --pronunciation terms.json --lang ja --json` lists the dictionary terms each line contains, the terms the script never uses, and the dictionary as transcription-skill's `--vocabulary`. Every op result carries the same per line in `pronunciation`.
 
+## Voice profile ([ADR-016](docs/decisions.md))
+
+A channel or a series keeps one voice with a `dubbing/voice-profile@1` file, given to `narrate`, `dub` or `describe` with `--profile narrator.json`:
+
+```json
+{"schema": "dubbing/voice-profile@1", "id": "clinic-narrator", "name": "Clinic channel narrator",
+ "engine": "voicevox", "voice": "3", "lang": "ja", "speed": 1.05, "pitch": 0.0, "loudness_target": -16.0}
+```
+
+- It fixes the engine, the voice (or a reference voice with its owner's consent record, paths relative to the profile; the consent gate applies as on the command line), the languages it is for, and the seed. A flag that says otherwise is refused.
+- `speed` and `pitch` reach engines with those controls only (VOICEVOX: `speedScale` / `pitchScale`; Kokoro: speed). Another engine refuses a non-neutral value before any work.
+- `loudness_target` (LUFS): NARRATE normalises its timeline to it through ffmpeg-skill/loudness. DUB and AUDIO_DESCRIPTION record it; their level is the mix's (`--voice-gain`).
+- Every receipt carries `voice_profile`: the id, the file's SHA-256 and the settings, in the result and in each clip's provenance. VOICEVOX is deterministic: two episodes spoken with one profile and the same text give the same audio, byte for byte.
+
 ## Engines (optional, [ADR-001](docs/decisions.md))
 
 | Engine | Code / weights licence | Japanese | Obligation | How the skill reaches it |

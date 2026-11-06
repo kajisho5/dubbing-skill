@@ -278,6 +278,12 @@ class FfmpegSkill:
                                retryable=False)
         return [[float(a), float(b)] for a, b in spans]
 
+    def loudness(self, input_path: str, output: str, lufs: float, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """ffmpeg-skill/loudness <in.wav> -o <out.wav> --lufs L: two-pass EBU R128 normalisation to L LUFS (true peak at
+        its default ceiling), the input's own sample rate kept. Returns its document (`result.input_i`: the loudness
+        measured on the output)."""
+        return self._tool("loudness", [os.path.abspath(input_path), "-o", os.path.abspath(output), f"--lufs={lufs:.1f}"], timeout)
+
     def pad(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
         """ffmpeg-skill/pad <clip> -o <out.wav> --start S --end E: silence before and after one clip. Only on a checkout
         whose pad declares audio_only (OPTIONAL_TOOLS); the caller checks that before any work."""
