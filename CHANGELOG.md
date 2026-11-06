@@ -2,6 +2,12 @@
 
 ## 0.1.0 - unreleased
 
+AI voice disclosure (roadmap step 14, ADR-017).
+
+- Every op result carries `disclosure` (`dubbing/disclosure@1`): AI-generated speech, what, engine, voices, voice profile, the consent record of a cloned voice, the watermark check, `labels`, a neutral English `line` and `publish.append` (the line and the credits) for publish-skill's description. `obligations.disclosure` and `provenance.synthetic_speech` in every clip.
+- `dubbing watermark <media>`: Chatterbox's Perth mark read back from any file through ffmpeg-skill/audio and resemble-perth's own detector in the worker.
+- Tests: the fake resemble-perth; the real publish-skill `plan` receiving the line (integration); in the `engines` job, the real Perth mark detected on a Chatterbox narration file and the line handed to publish-skill's plan. CI checks publish-skill out in the integration, engines and voicevox jobs.
+
 One voice per channel or series (roadmap step 13, ADR-016).
 
 - `--profile <profile.json>` on `narrate`, `dub` and `describe`: a `dubbing/voice-profile@1` file (id, engine, voice or consented reference, languages, speed, pitch, loudness target, seed). Flags that say otherwise are refused; a reference voice in a profile goes through the consent gate.

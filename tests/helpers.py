@@ -33,6 +33,23 @@ FFMPEG_SKILL_DIR = _dir_from_env("DUBBING_FFMPEG_SKILL_DIR", "ffmpeg-skill", "sc
 SUBTITLE_SKILL_DIR = _dir_from_env("DUBBING_SUBTITLE_SKILL_DIR", "subtitle-skill", "src/subtitle_skill/translation.py")
 
 
+# publish-skill with `plan` (its step 2): where the AI voice disclosure is handed over (roadmap step 14, ADR-017)
+PUBLISH_SKILL_DIR = _dir_from_env("DUBBING_PUBLISH_SKILL_DIR", "publish-skill", "src/publish_skill/plan.py")
+
+
+def run_publish_plan(deliverable: str, platform: str, description: str, title: str = "Test video") -> Dict[str, Any]:
+    """`publish plan --json` of the checkout at PUBLISH_SKILL_DIR on `deliverable`, as an agent calls it, with ffmpeg-skill
+    at FFMPEG_SKILL_DIR. Offline; nothing is uploaded. Returns its JSON document (a FAIL verdict on the delivery spec is
+    still a document)."""
+    import subprocess
+    assert PUBLISH_SKILL_DIR is not None and FFMPEG_SKILL_DIR is not None
+    run_env = dict(os.environ, PYTHONPATH=str(PUBLISH_SKILL_DIR / "src"), PYTHONIOENCODING="utf-8")
+    proc = subprocess.run([sys.executable, "-m", "publish_skill.cli", "plan", "--json", "--platform", platform, "--ffmpeg-skill",
+                           str(FFMPEG_SKILL_DIR), "--title", title, "--description", description, "--", deliverable],
+                          capture_output=True, env=run_env, timeout=300)
+    return json.loads(proc.stdout.decode("utf-8"))
+
+
 def run_subtitle_skill(request: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     """One `subtitle-skill run <request.json>` of the checkout at SUBTITLE_SKILL_DIR, as an agent calls it, with
     ffmpeg-skill at FFMPEG_SKILL_DIR. Returns its JSON response; a non-ok response fails the calling test."""
@@ -241,6 +258,7 @@ def fake_chatterbox(directory: str, version: str = "0.1.7", pykakasi: bool = Tru
     Path(pkg, "mtl_tts.py").write_text(FAKE_CHATTERBOX.replace("__RATE__", str(FAKE_RATE)).replace("__BASE__", repr(FAKE_BASE))
                                        .replace("__PER_CHAR__", repr(FAKE_PER_CHAR)), encoding="utf-8")
     Path(root, "torch.py").write_text(FAKE_TORCH, encoding="utf-8")
+    Path(root, "perth.py").write_text(FAKE_PERTH, encoding="utf-8")
     if pykakasi:
         Path(root, "pykakasi.py").write_text("", encoding="utf-8")
     dist = os.path.join(root, f"chatterbox_tts-{version}.dist-info")
@@ -262,7 +280,27 @@ def fake_chatterbox_weights(cache: str) -> str:
     return os.path.dirname(path)
 
 
-FAKE_MODULES = ("chatterbox", "torch", "pykakasi")
+FAKE_MODULES = ("chatterbox", "torch", "pykakasi", "perth")
+# The fake resemble-perth (ADR-017): PerthImplicitWatermarker.get_watermark is 1.0 on any audio that is not silent, 0.0
+# on silence or in mode nowatermark; it raises in mode nodetector. Each call goes to calls.json like the others.
+FAKE_PERTH = r'''
+import json, os
+HERE = os.path.dirname(os.path.abspath(__file__))
+MODE = os.environ.get("DUBBING_FAKE_CHATTERBOX_MODE", "tone")
+
+
+class PerthImplicitWatermarker:
+    def get_watermark(self, audio, sample_rate=None):
+        path = os.path.join(HERE, "calls.json")
+        calls = json.load(open(path)) if os.path.exists(path) else []
+        calls.append({"call": "perth_get_watermark", "samples": len(audio), "sample_rate": sample_rate})
+        json.dump(calls, open(path, "w"))
+        if MODE == "nodetector":
+            raise RuntimeError("no detector")
+        if MODE == "nowatermark":
+            return 0.0
+        return 1.0 if any(abs(float(v)) > 1e-4 for v in audio) else 0.0
+'''
 
 
 @contextmanager
@@ -797,6 +835,7 @@ def fake_kokoro(directory: str, version: str = "0.9.4", ja: bool = True) -> str:
     Path(pkg, "__init__.py").write_text(FAKE_KOKORO.replace("__RATE__", str(KOKORO_RATE)).replace("__BASE__", repr(KOKORO_BASE))
                                         .replace("__PER_CHAR__", repr(KOKORO_PER_CHAR)), encoding="utf-8")
     Path(root, "torch.py").write_text(FAKE_TORCH, encoding="utf-8")
+    Path(root, "perth.py").write_text(FAKE_PERTH, encoding="utf-8")
     for mod in (("misaki", "pyopenjtalk", "fugashi") if ja else ()):
         Path(root, f"{mod}.py").write_text("", encoding="utf-8")
     dist = os.path.join(root, f"kokoro-{version}.dist-info")

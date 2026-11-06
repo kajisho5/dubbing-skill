@@ -731,3 +731,32 @@ Roadmap step 13: a named voice profile (engine, voice or consented reference, sp
 ### Contract changes for video-production-agent
 
 Additive only: `inputs.voice_profile`, `[--profile <profile.json>]` on narrate / dub / audio-description, `engines.registered.*.controls`, VOICEVOX `deterministic: true`, and `voice_profile` in results and provenance. `contract_version` stays 1.0.
+
+## ADR-017 AI voice disclosure: every result says its speech is synthetic, the watermark is read back from files, and a neutral line goes to publish-skill
+
+### Context
+
+Roadmap step 14: every output records that it is synthetic (engine, voice, consent record when cloned), checks the watermark where the engine writes one (Chatterbox Perth), and hands a disclosure line to publish-skill's metadata, so the platforms' AI-labelling rules and the accountability for voice rights can be met. Done when: a Chatterbox fixture's watermark is detected, and the disclosure reaches the publish plan.
+
+### Findings (2026-11-06)
+
+- **Platform and legal rules differ in wording but agree on the facts**: say that the audio is AI-generated (synthetic or altered), and say so more prominently when a real person's voice is imitated. Some uploaders have their own field for it (publish-skill's TikTok Direct Post documents `is_aigc`); none of those fields is this skill's to set, because publish-skill owns every platform's upload metadata.
+- **publish-skill 0.1.0** (main): `publish plan --json --platform P --title … --description … -- <file>` is offline, checks the description against the platform's limits, and echoes the metadata it would bind (`metadata.description`). There is no disclosure field: the description is where a line goes.
+- **resemble-perth** (installed with chatterbox-tts 0.1.7): `perth.PerthImplicitWatermarker().get_watermark(audio, sample_rate=)` returns 1.0 for a marked signal, 0.0 otherwise. Chatterbox already reads it back from every clip as it is made (ADR-005).
+
+### Decision
+
+- **`disclosure` in every op result** (`dubbing/disclosure@1`): `synthetic_speech: true`, `what` (narration, dubbed dialogue, audio description), the engine, the voices, the voice profile id, `cloned_voice` and the consent record summary (owner, consenter, dates, scope, record and clip SHA-256) when a reference voice was used, the watermark check (`checked`, `detected`, `all_detected`, or `checked: false` with the reason for an engine that writes none), `labels` (`ai_generated_audio`, `synthetic_voice`, `cloned_real_voice`, `watermarked`) and the credits. `obligations.disclosure` carries the line; `provenance.synthetic_speech` is true in every clip and every output.
+- **A neutral default line, in English**: "This video contains AI-generated speech: the narration was synthesised by a text-to-speech engine." A cloned voice adds: "The synthetic voice imitates a real person's voice and is used with that person's recorded consent." No platform's own wording and no engine brand; `labels` carries the same facts for a platform field. Another language is the caller's (subtitle-skill translates; the facts stay in `labels`). `merge_disclosures` makes one line for a deliverable made by several ops.
+- **Handed over, not uploaded**: `disclosure.publish = {skill: publish-skill, field: description, append: line + credits}`. The caller appends it to the description it gives publish-skill `plan` / `upload`. This skill never calls publish-skill.
+- **`dubbing watermark <media>`**: the first audio stream extracted through ffmpeg-skill/audio, then the engine's own detector in the worker under the engine's interpreter (Chatterbox: resemble-perth). `detected` is true / false, or null with the reason when the detector could not run (never counted as found). Engines without a watermark refuse (`INVALID_ARGUMENT`).
+
+### Done when, checked
+
+- A Chatterbox fixture's watermark is detected: **met** in the `engines` CI job (`test_real_chatterbox_watermark_is_detected_and_disclosed`): a real Chatterbox narration file is read back by `dubbing watermark` with resemble-perth, outside the synthesis run. The same file's mark after AAC encoding into an MP4 is measured and written to the job summary, not asserted (first run, 2026-11-06: score 1.0 in the WAV and 1.0 after AAC in the MP4).
+- The disclosure reaches the publish plan: **met** with the real publish-skill `plan` (offline) in the integration job (DUB on a test video, fake Chatterbox, real ffmpeg-skill) and in the `engines` job (the real Chatterbox narration's line): `metadata.description` holds the line and every description row passes.
+- **Agent side**: passing `disclosure.publish.append` from the dub / narrate step to `publish.upload` is video-production-agent's wiring; this PR gives it the field.
+
+### Contract changes for video-production-agent
+
+Additive only: `disclosure` and `obligations.disclosure` in every op result, `provenance.synthetic_speech`, `policy.disclosure`, and the `dubbing/watermark` tool. `contract_version` stays 1.0.

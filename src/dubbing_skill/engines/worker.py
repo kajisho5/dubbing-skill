@@ -35,7 +35,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         with open(req_path, encoding="utf-8") as fh:
             doc = json.load(fh)
         engine = get_engine(str(doc["engine_id"]))
-        if "requests" in doc:         # several lines in one run, so a model is loaded once (NARRATE, ADR-005)
+        if "detect" in doc:           # a watermark read back from a file (dubbing watermark, ADR-017)
+            payload = {"ok": True, "detection": engine.detect_watermark(str(doc["detect"]["path"]))}
+        elif "requests" in doc:         # several lines in one run, so a model is loaded once (NARRATE, ADR-005)
             results = engine.process_batch([EngineRequest.from_dict(r) for r in doc["requests"]])
             payload = {"ok": True, "results": [r.to_dict() for r in results]}
         else:

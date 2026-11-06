@@ -204,6 +204,10 @@ class Engine:
                            f"(roadmap step {self.spec.roadmap_step})", {"engine": self.id, "op": req.op,
                                                                         "roadmap_step": self.spec.roadmap_step})
 
+    def detect_watermark(self, path: str) -> Dict[str, Any]:
+        """Read this engine's watermark back from a WAV file (in the worker). Only engines that write one (ADR-017)."""
+        raise DubbingError("INVALID_ARGUMENT", f"engine {self.id!r} writes no watermark", {"engine": self.id})
+
     def process_batch(self, reqs: List[EngineRequest]) -> List[EngineResult]:
         """Several lines in one worker run. An engine that loads a model overrides this to load it once."""
         return [self.process(r) for r in reqs]

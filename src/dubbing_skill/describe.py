@@ -29,6 +29,7 @@ from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, 
                      watermark_summary)
 from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, not_an_output, select_engine, unique_consents,
                   unique_credits, validate_clip, voice_request_fields)
+from .disclosure import build_disclosure
 from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
 from .provenance import build_provenance, sha256_text
@@ -308,6 +309,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
                                       translation=req.translation_note, ffmpeg_skill=info.to_dict(), watermark=watermark,
                                       credits=credits, consent=unique_consents(c["provenance"]["consent"] for c in placed_clips),
                                       voice_profile=voice_profile)
+        disclosure = build_disclosure("audio_description", engine_doc, placed_clips, watermark, credits, provenance["consent"],
+                                      voice_profile)
         _place(final, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -348,7 +351,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         "voice_profile": voice_profile,
         "skipped": [u["index"] for u in plan["unfit"]],
         "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
-                        "credits": credits, "watermark": watermark},
+                        "credits": credits, "watermark": watermark, "disclosure": disclosure["line"]},
+        "disclosure": disclosure,
         "steps": steps,
         "provenance": provenance,
         "warnings": warnings,
