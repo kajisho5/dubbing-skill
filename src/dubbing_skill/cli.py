@@ -21,6 +21,10 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   dubbing terms <script> --pronunciation <dict.json> --lang ja --json
                               the pronunciation dictionary terms each line contains (ADR-015); narrate, dub and describe
                               take the same dictionary with --pronunciation and apply it the way their engine takes it
+  dubbing watermark <media> --json
+                              an engine's watermark read back from any file (Chatterbox: Perth), after mixing and encoding
+                              (ADR-017); every op result also carries `disclosure`, the AI-speech facts and a line for the
+                              published description
   dubbing fit <cues> <clip>... --json
                               timing fit (ADR-007): one clip per cue measured through ffmpeg-skill/probe against its cue
                               window; the tempo each needs (at most --max-tempo), the silence around it, and every line
@@ -45,6 +49,7 @@ from .doctor import doctor, engines_report
 from .errors import DubbingError
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB
 from .ops import OVERFLOW_POLICIES, NarrateRequest, narrate
+from .disclosure import check_watermark
 from .pronunciation import terms_report
 from .service import DEFAULT_TIMEOUT
 from .timing import DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, TEMPO_LIMIT, UNFIT_POLICIES, FitRequest, fit
@@ -167,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--pronunciation", required=True, help="the dictionary (dubbing/pronunciation@1 JSON, ADR-015)")
     t.add_argument("--lang", required=True, help="the language the script is in; only entries for it are used")
     t.add_argument("--json", action="store_true")
+    w = sub.add_parser("watermark", help="read an engine's watermark back from any media file (a deliverable after mixing)")
+    w.add_argument("media", help="a video or audio file; its first audio stream is checked")
+    w.add_argument("--engine", default="chatterbox", help="the engine whose watermark to look for (default: chatterbox, Perth)")
+    w.add_argument("--timeout", type=float, default=600.0, help="time limit in seconds (default 600)")
+    w.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    w.add_argument("--json", action="store_true")
     f = sub.add_parser("fit", help="timing fit: measure one clip per cue against its window; tempo, silence, lines that cannot fit")
     f.add_argument("cues", help="cues (.json, .srt, .vtt): the windows to fit into")
     f.add_argument("clips", nargs="+", help="one audio clip per cue, in cue order (measured through ffmpeg-skill/probe)")
@@ -263,6 +274,11 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  credit: {c}")
         for w in doc["warnings"]:
             print(f"  warning: {w}")
+    elif doc.get("op") == "watermark":
+        wm = doc["watermark"]
+        state = {True: "found", False: "NOT found", None: "not checked"}[wm.get("detected")]
+        print(f"{doc['input']['path']}: {doc['engine']['watermark']} {state}" + (f" (score {wm['score']})" if "score" in wm else "")
+              + (f": {wm['detail']}" if wm.get("detail") else ""))
     elif doc.get("op") == "terms":
         sm = doc["summary"]
         print(f"{doc['input']['path']}: {sm['lines_with_terms']} of {doc['input']['lines']} line(s) contain dictionary terms "
@@ -354,6 +370,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                                            voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
                                            ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline,
                                  pronunciation_path=args.pronunciation, profile_path=args.profile)), as_json)
+            return 0
+        if args.cmd == "watermark":
+            _emit(check_watermark(args.media, args.engine, args.ffmpeg_skill, args.timeout), as_json)
             return 0
         if args.cmd == "terms":
             _emit(terms_report(args.script, args.pronunciation, args.lang), as_json)

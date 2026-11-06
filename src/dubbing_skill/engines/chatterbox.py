@@ -115,6 +115,26 @@ class ChatterboxEngine(Engine):
     def process(self, req: EngineRequest) -> EngineResult:
         return self.process_batch([req])[0]
 
+    def detect_watermark(self, path: str) -> Dict[str, Any]:
+        """Perth read back from a WAV file with resemble-perth's own detector (`perth.PerthImplicitWatermarker()
+        .get_watermark(audio, sample_rate=)`, 1.0 when present), in the worker under Chatterbox's interpreter."""
+        self.require()
+        if not in_worker():
+            raise DubbingError("INTERNAL_ERROR", "the Perth detector runs in the worker process only (ADR-001)", {"engine": self.id})
+        samples, rate = read_wav_mono(path)
+        record: Dict[str, Any] = {"name": WATERMARK_NAME, "detector": "resemble-perth PerthImplicitWatermarker.get_watermark",
+                                  "sample_rate": rate, "seconds": round(len(samples) / float(rate), 3) if rate else None}
+        try:
+            perth = importlib.import_module("perth")
+            try:
+                audio: Any = importlib.import_module("numpy").asarray(samples, dtype="float32")
+            except ImportError:
+                audio = samples
+            score = float(perth.PerthImplicitWatermarker().get_watermark(audio, sample_rate=rate))
+        except Exception as e:  # recorded as not checked, never as found
+            return dict(record, detected=None, detail=f"{type(e).__name__}: {e}")
+        return dict(record, detected=score >= 0.5, score=score)
+
     def process_batch(self, reqs: List[EngineRequest]) -> List[EngineResult]:
         for req in reqs:
             self.check_request(req)
@@ -151,6 +171,17 @@ class ChatterboxEngine(Engine):
                                                                  "watermark": watermark, "consent": consent,
                                                                  "model_snapshot": os.path.basename(str(snapshot))}))
         return results
+
+
+def read_wav_mono(path: str) -> Any:
+    """(float samples in [-1, 1], rate) of a 16-bit PCM WAV, its channels averaged."""
+    with wave.open(path, "rb") as w:
+        rate, channels, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
+        data = w.readframes(n)
+    if width != 2:
+        raise DubbingError("UNSUPPORTED_MEDIA", f"the watermark check reads 16-bit PCM, not {8 * width}-bit", {"engine": "chatterbox"})
+    values = struct.unpack(f"<{n * channels}h", data)
+    return [sum(values[i:i + channels]) / (channels * 32768.0) for i in range(0, len(values), channels)], rate
 
 
 def write_wav16(path: str, samples: List[float], rate: int) -> None:

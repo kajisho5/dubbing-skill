@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 from helpers import (FAKE_RATE, FFMPEG_SKILL_DIR, chatterbox_ready, env, fake_chatterbox_calls, fake_line_seconds, make_consent,
-                     no_engines_env, run_cli, write_tone_wav)
+                     no_engines_env, run_cli, write_tone_wav, PUBLISH_SKILL_DIR, run_publish_plan)
 
 from dubbing_skill.describe import DescribeRequest, describe
 from dubbing_skill.doctor import doctor
@@ -30,6 +30,7 @@ from dubbing_skill.engines import get_engine, voicevox
 from dubbing_skill.engines.base import EngineRequest
 from dubbing_skill.errors import DubbingError
 from dubbing_skill.ffmpeg_skill import TOOLS_USED, FfmpegSkill
+from dubbing_skill.disclosure import check_watermark
 from dubbing_skill.ops import NarrateRequest, narrate
 from dubbing_skill.provenance import sha256_file
 
@@ -283,6 +284,34 @@ class DubIntegrationTests(unittest.TestCase):
         self.assertTrue(facts["audio"] and facts["video"])
 
 
+@unittest.skipUnless(FFMPEG_SKILL_DIR and PUBLISH_SKILL_DIR and HAVE_FFMPEG,
+                     "needs ffmpeg-skill and publish-skill checkouts and ffmpeg/ffprobe on PATH")
+class DisclosureIntegrationTests(unittest.TestCase):
+    """Roadmap step 14 (ADR-017): a DUB on a real video (the fake Chatterbox, the real ffmpeg-skill) hands its disclosure
+    line to the real publish-skill `plan` (offline, nothing uploaded), and `dubbing watermark` reads the mark back from
+    the encoded deliverable."""
+
+    def test_the_disclosure_reaches_the_publish_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+            video = make_programme(os.path.join(tmp, "talk.mp4"), seconds=6.0)
+            cues = _write(os.path.join(tmp, "en.json"), json.dumps([{"start": 0.5, "end": 5.5, "text": "Welcome to the talk."}]))
+            out = os.path.join(tmp, "dubbed.mp4")
+            with chatterbox_ready(tmp):
+                doc = dub(DubRequest(input_path=video, cues_path=cues, output_path=out, lang="en"), skill=skill)
+                mark = check_watermark(out, skill=skill)
+            self.assertIs(mark["detected"], True, mark)
+            d = doc["disclosure"]
+            description = "Recording of the opening talk.\n\n" + d["publish"]["append"]
+            plan = run_publish_plan(out, "youtube", description)
+        self.assertTrue(str(plan.get("schema", "")).startswith("publish/plan"), plan)
+        self.assertEqual(plan["metadata"]["description"], description)
+        self.assertIn(d["line"], plan["metadata"]["description"])
+        rows = [r for r in plan["checks"] if str(r.get("check", r.get("name", ""))).startswith("description")]
+        self.assertTrue(rows, plan["checks"])
+        self.assertTrue(all(r["status"] == "PASS" for r in rows), rows)
+
+
 REAL = os.environ.get("DUBBING_REAL_CHATTERBOX") == "1"
 
 
@@ -329,6 +358,31 @@ class RealChatterboxTests(unittest.TestCase):
 
     def test_real_chatterbox_narrates_english(self):
         self.speak("en", ["Welcome to the conference.", "The next talk starts in five minutes."])
+
+    def test_real_chatterbox_watermark_is_detected_and_disclosed(self):
+        # roadmap step 14 (ADR-017): the Perth mark read back from a real Chatterbox narration file by `dubbing watermark`
+        # (resemble-perth's own detector, outside the synthesis run), and the narration's disclosure line handed to the real
+        # publish-skill plan for a video carrying it. The mark after AAC encoding into the video is measured, not asserted.
+        # (No docstring: the CI step greps for "<name> ... ok" on one line.)
+        script = _write(os.path.join(self.tmp.name, "intro.txt"), "Welcome to the clinic's health channel.\n")
+        wav = os.path.join(self.tmp.name, "intro.wav")
+        doc = narrate(NarrateRequest(script_path=script, output_path=wav, lang="en", timeout=3000), skill=self.skill)
+        mark = check_watermark(wav, skill=self.skill, timeout=1200)
+        self.assertIs(mark["detected"], True, mark)
+        d = doc["disclosure"]
+        self.assertEqual((d["watermark"]["all_detected"], d["labels"]["watermarked"], d["cloned_voice"]), (True, True, False))
+        video = make_programme(os.path.join(self.tmp.name, "programme.mp4"), seconds=4.0)
+        out = os.path.join(self.tmp.name, "narrated.mp4")
+        self.skill.replace_audio(video, wav, out)
+        encoded = check_watermark(out, skill=self.skill, timeout=1200)
+        description = "Episode 1.\n\n" + d["publish"]["append"]
+        plan = run_publish_plan(out, "youtube", description)
+        self.assertEqual(plan["metadata"]["description"], description, plan)
+        log = os.environ.get("DUBBING_MEASURE_LOG")
+        if log:
+            with open(log, "a", encoding="utf-8") as fh:
+                fh.write(f"| en (watermark) | 1 | {doc['output']['duration']:.2f} | - | - | WAV score {mark['watermark'].get('score')}, "
+                         f"AAC in MP4 score {encoded['watermark'].get('score')} | {encoded['detected']} |\n")
 
     def test_real_chatterbox_dubs_a_video(self):
         # DUB end to end with the real engine (roadmap step 9's CI): one English line over a 6 s test video, ducked, back

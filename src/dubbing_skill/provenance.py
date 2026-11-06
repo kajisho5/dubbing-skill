@@ -41,6 +41,7 @@ def build_provenance(*, op: str, engine: Dict[str, Any], text: str, output_path:
     return {
         "skill": {"id": SKILL_ID, "version": __version__},
         "op": op,
+        "synthetic_speech": True,             # every output of this skill is AI-generated speech (ADR-017)
         "engine": {k: engine.get(k) for k in ENGINE_FIELDS},
         "voice": voice,
         "text": {"sha256": sha256_text(text), "chars": len(text)},

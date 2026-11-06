@@ -40,8 +40,9 @@ jobs:
 
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract, probe and join),
-    # AI-video-production-OS (registry conformance checks) and subtitle-skill main (translate and mux in the localise
-    # chain, roadmap step 11, ADR-014; run from its source with engine memory, no model). No engine and no weights are installed (ADR-001): NARRATE,
+    # AI-video-production-OS (registry conformance checks), subtitle-skill main (translate and mux in the localise
+    # chain, roadmap step 11, ADR-014; run from its source with engine memory, no model) and publish-skill main (its
+    # offline `plan` receives the AI voice disclosure, roadmap step 14, ADR-017). No engine and no weights are installed (ADR-001): NARRATE,
     # DUB and AUDIO_DESCRIPTION run on the fake Chatterbox, VOICEVOX, Kokoro and Style-Bert-VITS2, the media through the
     # real ffmpeg-skill (probe, join, audio, cut, silence) on test videos made with FFmpeg's own sources. Nothing may skip here except the real-engine tests, which run in
     # `engines` (Chatterbox) and `voicevox`. Run against ffmpeg-skill main and the 3.0.0 release pinned by commit (ADR-013).
@@ -68,6 +69,10 @@ jobs:
         with:
           repository: kajisho5/subtitle-skill
           path: vendor/subtitle-skill
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/publish-skill
+          path: vendor/publish-skill
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -78,6 +83,7 @@ jobs:
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
           DUBBING_SUBTITLE_SKILL_DIR: ${{ github.workspace }}/vendor/subtitle-skill
+          DUBBING_PUBLISH_SKILL_DIR: ${{ github.workspace }}/vendor/publish-skill
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee test.log
@@ -114,6 +120,10 @@ jobs:
         with:
           repository: kajisho5/subtitle-skill
           path: vendor/subtitle-skill
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/publish-skill
+          path: vendor/publish-skill
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -163,12 +173,13 @@ jobs:
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
           DUBBING_SUBTITLE_SKILL_DIR: ${{ github.workspace }}/vendor/subtitle-skill
+          DUBBING_PUBLISH_SKILL_DIR: ${{ github.workspace }}/vendor/publish-skill
         run: |
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
           ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real VOICEVOX"
-          for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english test_real_chatterbox_dubs_a_video; do
+          for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english test_real_chatterbox_dubs_a_video test_real_chatterbox_watermark_is_detected_and_disclosed; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done
           { echo "### Real Chatterbox $CHATTERBOX_VERSION on CPU (NARRATE, text mode; DUB on a test video)"; echo;
@@ -199,6 +210,10 @@ jobs:
         with:
           repository: kajisho5/subtitle-skill
           path: vendor/subtitle-skill
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/publish-skill
+          path: vendor/publish-skill
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -224,6 +239,7 @@ jobs:
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
           DUBBING_SUBTITLE_SKILL_DIR: ${{ github.workspace }}/vendor/subtitle-skill
+          DUBBING_PUBLISH_SKILL_DIR: ${{ github.workspace }}/vendor/publish-skill
         run: |
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"

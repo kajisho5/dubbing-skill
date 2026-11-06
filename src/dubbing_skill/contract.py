@@ -17,6 +17,7 @@ from .describe import (DEFAULT_MIN_GAP, DEFAULT_SILENCE_THRESHOLD, DESCRIBE_SCHE
 from .dub import ALIGN_TOLERANCE, DUB_SCHEMA, DUB_TEMPO, TEMPO_GAP
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, MAX_DUCK_DB, MAX_VOICE_GAIN_DB
 from .ops import NARRATE_SCHEMA
+from .disclosure import DISCLOSURE_SCHEMA, LINE_LANG, WATERMARK_SCHEMA, disclosure_line
 from .profile import LOUDNESS_RANGE, PITCH_RANGE, SPEED_RANGE, VOICE_PROFILE_SCHEMA
 from .pronunciation import METHODS as PRONUNCIATION_METHODS, PRONUNCIATION_SCHEMA, TERMS_SCHEMA
 from .provenance import ENGINE_FIELDS
@@ -224,6 +225,13 @@ def tools() -> list:
          "inputs": ["cues (CUES_INPUT) or plain text", "a pronunciation dictionary (PRONUNCIATION_INPUT)"],
          "argv": ["terms", "<cues.json|cues.srt|cues.vtt|text.txt>", "--pronunciation <dict.json>", "--lang <ja>", "--json"],
          "schema": TERMS_SCHEMA},
+        {"tool_id": f"{SKILL_ID}/watermark", "role": "analysis", "writes_media": False, "mutates_input": False,
+         "deterministic": True, "implemented": True, "roadmap_step": 14,
+         "description": "An engine's watermark read back from any media file (ADR-017): the first audio stream extracted "
+                        "through ffmpeg-skill/audio, the engine's own detector run in the worker (Chatterbox: Perth). For "
+                        "a deliverable after mixing and encoding; each op already reads the mark back from every clip",
+         "argv": ["watermark", "<media>", "[--engine chatterbox]", "[--timeout 600]", "[--ffmpeg-skill <dir>]", "--json"],
+         "schema": WATERMARK_SCHEMA},
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engines, ffmpeg-skill) and how to get it; never downloads",
          "argv": ["doctor", "[--offline]", "[--ffmpeg-skill <dir>]", "--json"], "schema": DOCTOR_SCHEMA},
@@ -299,10 +307,20 @@ def contract() -> Dict[str, Any]:
                              "('VOICEVOX:<character>', with the speaker and the character) into each clip's provenance "
                              "`credits` and the op's `obligations`",
                    "voice_terms": voice_terms(),
+                   "disclosure": {"schema": DISCLOSURE_SCHEMA, "every_output": True,
+                                  "result": "disclosure {synthetic_speech, what, engine, voices, voice_profile, cloned_voice, "
+                                            "consent, watermark, labels, line, line_lang, credits, publish}; obligations.disclosure",
+                                  "line_lang": LINE_LANG, "line_example": disclosure_line("narrate", False),
+                                  "line_example_cloned": disclosure_line("dub", True),
+                                  "labels": ["ai_generated_audio", "synthetic_voice", "cloned_real_voice", "watermarked"],
+                                  "publish": "append disclosure.publish.append to the description given to publish-skill "
+                                             "(plan / upload --description); map labels to a platform's own AI-content field",
+                                  "translation": "the line is English; another language is the caller's (subtitle-skill)",
+                                  "adr": "docs/decisions.md ADR-017"},
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance, and "
                                 "Chatterbox's Perth mark is read back from every clip (a clip where it is not found is refused)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "voice", "text.sha256", "translation",
-                                  "watermark", "credits", "consent", "voice_profile", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
+                                  "synthetic_speech", "watermark", "credits", "consent", "voice_profile", "output.sha256", "parameters", "ffmpeg_skill.version", "network"],
                        "per_clip": True,
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["dubbing", "<command>", "...", "--json"], "network": False, "shell": False,

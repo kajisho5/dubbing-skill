@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .engines import get_engine
 from .engines.base import EngineRequest, EngineResult
@@ -68,6 +68,15 @@ def run_engine(engine_id: str, req: EngineRequest, timeout: float, run_dir: str)
         return EngineResult.from_dict(payload["result"])
     except (KeyError, TypeError, ValueError) as e:
         raise DubbingError("INVALID_RESULT", f"engine {engine_id!r} returned a malformed result: {e}", {"engine": engine_id})
+
+
+def run_engine_detect(engine_id: str, path: str, timeout: float, run_dir: str) -> Dict[str, Any]:
+    """The engine's watermark detector on one WAV file, in the worker under the engine's own interpreter (ADR-017)."""
+    payload = _call_worker(engine_id, {"detect": {"path": os.path.abspath(path)}}, timeout, run_dir)
+    found = payload.get("detection")
+    if not isinstance(found, dict) or found.get("detected") not in (True, False, None):
+        raise DubbingError("INVALID_RESULT", f"engine {engine_id!r} returned a malformed watermark reading", {"engine": engine_id})
+    return found
 
 
 def run_engine_batch(engine_id: str, reqs: List[EngineRequest], timeout: float, run_dir: str) -> List[EngineResult]:

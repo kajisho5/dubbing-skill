@@ -45,6 +45,7 @@ from .engines import DEFAULT_ENGINE, engines_for, get_engine
 from .engines.base import CONSENT_PARAM, OK, Engine, EngineRequest
 from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill, SkillInfo
+from .disclosure import build_disclosure
 from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
 from .provenance import build_provenance, sha256_text
@@ -435,6 +436,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                                       ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits,
                                       consent=unique_consents(c["provenance"]["consent"] for c in clips),
                                       voice_profile=profile_receipt(profile, loudness=loudness))
+        disclosure = build_disclosure("narrate", engine_doc, clips, watermark, credits, provenance["consent"],
+                                      profile_receipt(profile, loudness=loudness))
         _place(timeline, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -470,7 +473,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         "pronunciation": pronunciation,
         "voice_profile": profile_receipt(profile, loudness=loudness),
         "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
-                        "credits": credits, "watermark": watermark},
+                        "credits": credits, "watermark": watermark, "disclosure": disclosure["line"]},
+        "disclosure": disclosure,
         "steps": steps,
         "provenance": provenance,
         "warnings": warnings,

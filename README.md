@@ -42,6 +42,7 @@ dubbing describe talk.mp4 desc.json --lang ja -o talk.ad.mp4 --detect-gaps --jso
 dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and silence each line needs; lines that cannot fit
 dubbing fit ja.srt line0.wav line1.wav --lang ja --rate --json   # plus the voice's rate and a length budget per unfit line
 dubbing terms script.txt --pronunciation terms.json --lang ja --json   # the dictionary terms each line contains
+dubbing watermark final.mp4 --json   # Chatterbox's Perth mark read back from a deliverable
 ```
 
 ## NARRATE
@@ -126,6 +127,16 @@ A channel or a series keeps one voice with a `dubbing/voice-profile@1` file, giv
 - `speed` and `pitch` reach engines with those controls only (VOICEVOX: `speedScale` / `pitchScale`; Kokoro: speed). Another engine refuses a non-neutral value before any work.
 - `loudness_target` (LUFS): NARRATE normalises its timeline to it through ffmpeg-skill/loudness. DUB and AUDIO_DESCRIPTION record it; their level is the mix's (`--voice-gain`).
 - Every receipt carries `voice_profile`: the id, the file's SHA-256 and the settings, in the result and in each clip's provenance. VOICEVOX is deterministic: two episodes spoken with one profile and the same text give the same audio, byte for byte.
+
+## AI voice disclosure ([ADR-017](docs/decisions.md))
+
+Every op result says that its speech is AI-generated, in `disclosure` (and `provenance.synthetic_speech` in every clip):
+
+- what was synthesised (narration, dubbed dialogue, audio description), the engine, the voices, the voice profile, and, when a real person's voice was cloned, that person's consent record (who, when, scope, the record's and the clip's SHA-256);
+- the watermark: Chatterbox's Perth mark is read back from every clip as it is made (`checked`, `detected`, `all_detected`); engines that write none say so;
+- `line`: a neutral English sentence for the published description ("This video contains AI-generated speech: the narration was synthesised by a text-to-speech engine."; a cloned voice adds that it imitates a real person's voice, used with their recorded consent), `labels` (booleans a publisher maps to a platform's own AI-content field), and `publish.append`: the line and the credits, to append to the description given to publish-skill.
+
+`dubbing watermark final.mp4 --json` reads the Perth mark back from any file, after mixing and encoding: its first audio stream is extracted through ffmpeg-skill/audio and resemble-perth's own detector runs in the Chatterbox worker.
 
 ## Engines (optional, [ADR-001](docs/decisions.md))
 

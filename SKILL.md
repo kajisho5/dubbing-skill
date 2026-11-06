@@ -15,7 +15,7 @@ Run `dubbing <command>` (installed by `pip install -e .`; stdlib only), or `pyth
    - When an engine is not `OK`, tell the user the install line. Never install or download anything yourself.
 2. **Get translated text from elsewhere.** This skill never translates. The cues' text must already be in `--lang`, from subtitle-skill, a translator or you. Record who translated it with `--translation-note '{"engine": ..., "reviewer": ...}'`.
 3. **Run the op** (below) with `--json`. Every check runs before the engine starts. A refusal costs nothing, and nothing is written on failure.
-4. **Report from the JSON**: `output.path`, `output.duration`, `output.av_delta`, `kept_original` / `skipped`, `warnings`, and `obligations`. The `credit` strings must appear in the published video's description or credits. The `watermark` must never be removed.
+4. **Report from the JSON**: `output.path`, `output.duration`, `output.av_delta`, `kept_original` / `skipped`, `warnings`, and `obligations`. The `credit` strings must appear in the published video's description or credits. The `watermark` must never be removed. `disclosure` says the speech is AI-generated: append `disclosure.publish.append` (the line plus the credits) to the description you give publish-skill, and keep `disclosure.labels` for the platform's own AI-content setting.
 
 ## Request → command
 
@@ -36,6 +36,8 @@ Run `dubbing <command>` (installed by `pip install -e .`; stdlib only), or `pyth
 | "say these medical terms / names correctly" | write them in a `dubbing/pronunciation@1` dictionary (term, lang, reading, optional accent / ipa) and add `--pronunciation terms.json` to `narrate`, `dub` or `describe`; check `pronunciation.summary` in the result |
 | "which terms in this script are in the dictionary?" | `dubbing terms script.txt --pronunciation terms.json --lang ja --json` (no engine, writes nothing) |
 | "use the same voice as last episode" / "our channel's narrator" | `--profile narrator.json` (a `dubbing/voice-profile@1` file: id, engine, voice or consented reference, speed, pitch, loudness target) on `narrate`, `dub` or `describe`; report `voice_profile.id` |
+| "is the watermark still in the final video?" | `dubbing watermark final.mp4 --json` (Chatterbox Perth, read back from the file's first audio stream; writes nothing) |
+| "how do we label the AI voice when we publish?" | take `disclosure` from the op's JSON: `line` (neutral English, for the description), `labels`, `credits`; for several ops on one video, say all of them in one line |
 | "which engines can I use here" | `dubbing engines --json` |
 | "what can this skill do" (machine-readable) | `dubbing contract --json` (alias `skill --json`) |
 
@@ -58,6 +60,7 @@ Any problem is `CONSENT_REQUIRED`, and `error.details.problems` lists all of the
 Done: talk.en.mp4 — 1802.4 s (video), audio/picture delta 0.000 s, 412 lines dubbed, 3 kept original (lines 17, 98, 240)
 Credit to publish: (none) / VOICEVOX:ずんだもん / Style-Bert-VITS2 model: jvnv-F1-jp, JVNV corpus, CC BY-SA 4.0
 Watermark: Resemble AI Perth in 412/412 clips
+Disclosure (for the description): This video contains AI-generated speech: the dubbed dialogue was synthesised by a text-to-speech engine.
 Warnings: ...   (only if any)
 ```
 
@@ -76,6 +79,7 @@ Report numbers from the output document, not from memory.
 - `obligations.credit` is empty for Chatterbox. Its obligation is the watermark. Never strip or re-encode it away.
 - A pronunciation dictionary is the caller's data, per project and per language. Never invent readings for the user, and never apply a Japanese dictionary to another `--lang`: only entries for the op's language are used. With VOICEVOX, `pronunciation.summary.unconfirmed` lists terms the engine still read otherwise; for the other engines `confirmed` is null (they give no reading back), so listen or check with transcription-skill.
 - With `--profile`, do not also pass `--engine`, `--voice`, `--reference`, `--consent` or `--seed` with other values: the profile is the voice, and a clash is `INVALID_ARGUMENT`. A profile with a reference voice still needs its consent record. Only VOICEVOX repeats byte for byte (`provenance.engine.deterministic`); neural engines sound alike, not identical.
+- Never drop or soften `disclosure.line` because a platform does not ask for it, and never claim a cloned voice is the person speaking. The line is English; translate it for another audience (subtitle-skill) and keep its meaning. `dubbing watermark` saying `false` on a mixed or re-encoded deliverable is a finding to report, not something to fix by re-running until it passes.
 - The output must not exist unless you pass `--overwrite`. An output equal to any input is refused.
 
 ## Boundaries
