@@ -753,7 +753,7 @@ Roadmap step 14: every output records that it is synthetic (engine, voice, conse
 
 ### Done when, checked
 
-- A Chatterbox fixture's watermark is detected: **met** in the `engines` CI job (`test_real_chatterbox_watermark_is_detected_and_disclosed`): a real Chatterbox narration file is read back by `dubbing watermark` with resemble-perth, outside the synthesis run. The same file's mark after AAC encoding into an MP4 is measured and written to the job summary, not asserted.
+- A Chatterbox fixture's watermark is detected: **met** in the `engines` CI job (`test_real_chatterbox_watermark_is_detected_and_disclosed`): a real Chatterbox narration file is read back by `dubbing watermark` with resemble-perth, outside the synthesis run. The same file's mark after AAC encoding into an MP4 is measured and written to the job summary, not asserted (first run, 2026-11-06: score 1.0 in the WAV and 1.0 after AAC in the MP4).
 - The disclosure reaches the publish plan: **met** with the real publish-skill `plan` (offline) in the integration job (DUB on a test video, fake Chatterbox, real ffmpeg-skill) and in the `engines` job (the real Chatterbox narration's line): `metadata.description` holds the line and every description row passes.
 - **Agent side**: passing `disclosure.publish.append` from the dub / narrate step to `publish.upload` is video-production-agent's wiring; this PR gives it the field.
 
