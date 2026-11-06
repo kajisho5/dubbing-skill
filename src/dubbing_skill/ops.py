@@ -45,6 +45,7 @@ from .engines import DEFAULT_ENGINE, engines_for, get_engine
 from .engines.base import CONSENT_PARAM, OK, Engine, EngineRequest
 from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill, SkillInfo
+from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
@@ -75,6 +76,7 @@ class NarrateRequest:
     ffmpeg_skill_dir: Optional[str] = None
     offline: bool = False
     pronunciation_path: Optional[str] = None  # a dubbing/pronunciation@1 dictionary (ADR-015)
+    profile_path: Optional[str] = None        # a dubbing/voice-profile@1 voice profile (ADR-016)
 
 
 MIN_REFERENCE_SECONDS = 1.0         # a reference voice shorter than this cannot carry a voice
@@ -227,6 +229,13 @@ def plan_timeline(script: Script, durations: List[float], on_overflow: str = "fa
             "overruns": [s["index"] for s in segments if s.get("overrun")]}
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def _tolerance(expected: float) -> float:
     return max(DURATION_TOLERANCE, 0.01 * expected)
 
@@ -339,13 +348,14 @@ def unique_consents(per_clip: Any) -> Optional[List[Dict[str, Any]]]:
 def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     """NARRATE: the script at `req.script_path` spoken in `req.lang` and laid on one mono WAV at `req.output_path`.
     `skill` is the ffmpeg-skill handle (located from `req.ffmpeg_skill_dir` when None)."""
-    reference, voice_params = voice_request_fields(req.reference_path, req.consent_path)
     _check_numbers(req)
+    req, profile = with_profile(req)
+    reference, voice_params = voice_request_fields(req.reference_path, req.consent_path)
     src, dst = check_paths(req.script_path, req.output_path, req.overwrite)
-    not_an_output(dst, req.reference_path, req.consent_path, req.pronunciation_path)
+    not_an_output(dst, req.reference_path, req.consent_path, req.pronunciation_path, req.profile_path)
     script = parse_script(src, req.lang)
     engine, report = select_engine("narrate", req.engine, req.offline)
-    params: Dict[str, Any] = dict(voice_params, seed=req.seed)
+    params: Dict[str, Any] = dict(voice_params, seed=req.seed, **(profile.engine_params() if profile else {}))
     if req.accept_unverified_terms:
         params["accept_unverified_terms"] = True
     pron = prepare_pronunciation(req.pronunciation_path, engine, req.lang, [line.text for line in script.lines])
@@ -377,11 +387,21 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         steps: List[Dict[str, Any]] = [{"tool": "ffmpeg-skill/probe", "for": "clips", "count": len(clip_facts)}]
         timeline, lay_steps = _lay_out(skill, [r.output_path for r in reqs], plan, rate, run_dir, timeout)
         steps += lay_steps
+        loudness = None
+        if profile is not None and profile.loudness_target is not None:      # the profile's level (ADR-016)
+            levelled = os.path.join(run_dir, "timeline-loudness.wav")
+            doc = skill.loudness(timeline, levelled, profile.loudness_target, timeout=timeout)
+            result = doc.get("result") if isinstance(doc.get("result"), dict) else {}
+            loudness = {"target_lufs": profile.loudness_target, "measured_lufs": _float_or_none(result.get("input_i")),
+                        "true_peak": _float_or_none(result.get("input_tp"))}
+            steps.append({"tool": "ffmpeg-skill/loudness", "flags": ["--lufs", f"{profile.loudness_target:.1f}"], "for": "timeline"})
+            timeline = levelled
         out_facts = validate_timeline(skill, timeline, rate, float(plan["total"]))
         steps.append({"tool": "ffmpeg-skill/probe", "for": "timeline"})
 
         first = results[0]
         engine_doc = dict(report, version=first.engine_version, model=first.model)
+        voice_profile = profile_receipt(profile)
         clips = []
         for line, r, res, facts in zip(script.lines, reqs, results, clip_facts):
             a = facts["audio"]
@@ -395,7 +415,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                                                          parameters=parameters, voice=res.extra.get("voice") or req.voice,
                                                          translation=req.translation_note, ffmpeg_skill=info.to_dict(),
                                                          watermark=res.extra.get("watermark"), credits=clip_credits(engine, res),
-                                                         consent=res.extra.get("consent"))})
+                                                         consent=res.extra.get("consent"), voice_profile=voice_profile)})
         marks = [c["provenance"]["watermark"] for c in clips]
         watermark = None
         if engine.spec.watermark:
@@ -413,7 +433,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         provenance = build_provenance(op="narrate", engine=engine_doc, text=full_text, output_path=timeline, parameters=parameters,
                                       voice=first.extra.get("voice") or req.voice, translation=req.translation_note,
                                       ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits,
-                                      consent=unique_consents(c["provenance"]["consent"] for c in clips))
+                                      consent=unique_consents(c["provenance"]["consent"] for c in clips),
+                                      voice_profile=profile_receipt(profile, loudness=loudness))
         _place(timeline, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -447,6 +468,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         "timeline": plan,
         "clips": clips,
         "pronunciation": pronunciation,
+        "voice_profile": profile_receipt(profile, loudness=loudness),
         "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
                         "credits": credits, "watermark": watermark},
         "steps": steps,

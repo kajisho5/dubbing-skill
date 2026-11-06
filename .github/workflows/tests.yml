@@ -229,7 +229,7 @@ jobs:
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
           ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real Chatterbox"
-          for t in test_real_voicevox_narrates_japanese test_real_voicevox_speakers_and_terms test_real_voicevox_describes_a_video test_real_voicevox_reads_the_dictionary_terms; do
+          for t in test_real_voicevox_narrates_japanese test_real_voicevox_speakers_and_terms test_real_voicevox_describes_a_video test_real_voicevox_reads_the_dictionary_terms test_real_voicevox_same_profile_same_audio; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done
           { echo "### Real VOICEVOX 0.26.0 on CPU (NARRATE, text mode, default voice)"; echo;

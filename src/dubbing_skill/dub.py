@@ -47,6 +47,7 @@ from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, 
                      validate_output, watermark_summary)
 from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, not_an_output, select_engine, unique_consents,
                   unique_credits, validate_clip, voice_request_fields)
+from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
@@ -86,6 +87,7 @@ class DubRequest:
     ffmpeg_skill_dir: Optional[str] = None
     offline: bool = False
     pronunciation_path: Optional[str] = None  # a dubbing/pronunciation@1 dictionary (ADR-015)
+    profile_path: Optional[str] = None        # a dubbing/voice-profile@1 voice profile for every speaker without its own (ADR-016)
 
 
 def _check_numbers(req: DubRequest) -> None:
@@ -144,6 +146,11 @@ def check_alignment(target: Script, source: Script) -> None:
                                 "tolerance": ALIGN_TOLERANCE})
 
 
+def own_voice(req: DubRequest, speaker: Optional[str]) -> bool:
+    """Whether a cue speaker has a voice or reference of its own (else the default voice, or the voice profile)."""
+    return speaker is not None and (speaker in req.speaker_voices or speaker in req.speaker_references)
+
+
 def voice_for(req: DubRequest, speaker: Optional[str]) -> Optional[str]:
     if speaker is not None and speaker in req.speaker_voices:
         return req.speaker_voices[speaker]
@@ -196,8 +203,9 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     spoken by a local engine, written to `req.output_path`. `skill` is the ffmpeg-skill handle (located from
     `req.ffmpeg_skill_dir` when None)."""
     _check_numbers(req)
+    req, profile = with_profile(req)
     side = [req.cues_path] + ([req.source_cues_path] if req.source_cues_path else []) + \
-        ([req.pronunciation_path] if req.pronunciation_path else [])
+        ([req.pronunciation_path] if req.pronunciation_path else []) + ([req.profile_path] if req.profile_path else [])
     src, dst, kind = check_media_paths(req.input_path, side, req.output_path, req.overwrite)
     not_an_output(dst, req.reference_path, req.consent_path, *req.speaker_references.values(), *req.speaker_consents.values())
     unused = sorted(set(req.speaker_consents) - set(req.speaker_references))
@@ -215,7 +223,8 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     engine, report = select_engine("dub", req.engine, req.offline)
     pron = prepare_pronunciation(req.pronunciation_path, engine, req.lang, [line.text for line in script.lines])
     probe_reqs = [EngineRequest(op="dub", text=pron.texts[k], lang=req.lang, output_path="", voice=voice_for(req, line.speaker),
-                                reference_audio=reference, params=dict(voice_params, seed=req.seed, **pron.params[k]))
+                                reference_audio=reference, params=dict(voice_params, seed=req.seed, **pron.params[k],
+                                                                       **(profile.engine_params() if profile else {})))
                   for k, (line, (reference, voice_params)) in enumerate(zip(script.lines, line_voices))]
     for r in probe_reqs:
         engine.check_request(r)                   # the consent records and the reference clips' hashes, before any work
@@ -272,6 +281,8 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
         first = results[0]
         engine_doc = dict(report, version=first.engine_version, model=first.model)
         statuses = {d["index"]: d for d in plan["lines"]}
+        voice_profile = profile_receipt(profile, applies_to="lines whose speaker has no voice of its own",
+                                        loudness="recorded, not applied: the level is the mix's (--voice-gain)")
         clips = []
         for line, r, res, facts in zip(script.lines, reqs, results, clip_facts):
             a = facts["audio"]
@@ -290,7 +301,9 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
                                                          parameters=parameters, voice=res.extra.get("voice") or r.voice,
                                                          translation=req.translation_note, ffmpeg_skill=info.to_dict(),
                                                          watermark=res.extra.get("watermark"), credits=clip_credits(engine, res),
-                                                         consent=res.extra.get("consent"))})
+                                                         consent=res.extra.get("consent"),
+                                                         voice_profile=None if own_voice(req, line.speaker)
+                                                         else voice_profile)})
         placed_clips = [c for c in clips if c["placed"]]
         watermark = watermark_summary(engine.spec.watermark, [c["provenance"]["watermark"] for c in placed_clips])
         credits = unique_credits(c["provenance"]["credits"] for c in placed_clips)
@@ -306,7 +319,8 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
         provenance = build_provenance(op="dub", engine=engine_doc, text=full_text, output_path=final, parameters=parameters,
                                       voice=first.extra.get("voice") or req.voice, translation=req.translation_note,
                                       ffmpeg_skill=info.to_dict(), watermark=watermark, credits=credits,
-                                      consent=unique_consents(c["provenance"]["consent"] for c in placed_clips))
+                                      consent=unique_consents(c["provenance"]["consent"] for c in placed_clips),
+                                      voice_profile=voice_profile)
         _place(final, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -342,6 +356,7 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
                 "channels": channels},
         "clips": clips,
         "pronunciation": pronunciation,
+        "voice_profile": voice_profile,
         "kept_original": [u["index"] for u in plan["unfit"]],
         "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
                         "credits": credits, "watermark": watermark},

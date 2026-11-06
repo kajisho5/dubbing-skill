@@ -35,6 +35,7 @@ Run `dubbing <command>` (installed by `pip install -e .`; stdlib only), or `pyth
 | "localise this talk into Japanese" (translate → dub → subtitles) | subtitle-skill `translate` (source cues → `ja.srt`) → `dubbing dub talk.mp4 ja.srt --lang ja --source-cues en.srt -o talk.ja.mp4 --on-unfit keep --json` → for each line in `kept_original`, ask `translate` once more for a line within `fit.unfit[].budget` and dub again → subtitle-skill `mux` the ja cues into the dubbed video. One cue list throughout: never re-time the translation |
 | "say these medical terms / names correctly" | write them in a `dubbing/pronunciation@1` dictionary (term, lang, reading, optional accent / ipa) and add `--pronunciation terms.json` to `narrate`, `dub` or `describe`; check `pronunciation.summary` in the result |
 | "which terms in this script are in the dictionary?" | `dubbing terms script.txt --pronunciation terms.json --lang ja --json` (no engine, writes nothing) |
+| "use the same voice as last episode" / "our channel's narrator" | `--profile narrator.json` (a `dubbing/voice-profile@1` file: id, engine, voice or consented reference, speed, pitch, loudness target) on `narrate`, `dub` or `describe`; report `voice_profile.id` |
 | "which engines can I use here" | `dubbing engines --json` |
 | "what can this skill do" (machine-readable) | `dubbing contract --json` (alias `skill --json`) |
 
@@ -74,6 +75,7 @@ Report numbers from the output document, not from memory.
 - Kokoro's Japanese is weak (graded C+ to C-). Prefer Chatterbox or VOICEVOX for Japanese.
 - `obligations.credit` is empty for Chatterbox. Its obligation is the watermark. Never strip or re-encode it away.
 - A pronunciation dictionary is the caller's data, per project and per language. Never invent readings for the user, and never apply a Japanese dictionary to another `--lang`: only entries for the op's language are used. With VOICEVOX, `pronunciation.summary.unconfirmed` lists terms the engine still read otherwise; for the other engines `confirmed` is null (they give no reading back), so listen or check with transcription-skill.
+- With `--profile`, do not also pass `--engine`, `--voice`, `--reference`, `--consent` or `--seed` with other values: the profile is the voice, and a clash is `INVALID_ARGUMENT`. A profile with a reference voice still needs its consent record. Only VOICEVOX repeats byte for byte (`provenance.engine.deterministic`); neural engines sound alike, not identical.
 - The output must not exist unless you pass `--overwrite`. An output equal to any input is refused.
 
 ## Boundaries

@@ -31,6 +31,7 @@ from dubbing_skill.engines.base import EngineRequest
 from dubbing_skill.errors import DubbingError
 from dubbing_skill.ffmpeg_skill import TOOLS_USED, FfmpegSkill
 from dubbing_skill.ops import NarrateRequest, narrate
+from dubbing_skill.provenance import sha256_file
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
@@ -433,6 +434,23 @@ class RealVoicevoxTests(unittest.TestCase):
                 fh.write(f"| ja (dictionary) | {doc['input']['lines']} | {doc['output']['duration']:.2f} | "
                          f"{doc['output']['expected_duration']:.2f} | - | " + " / ".join(ln["read_as"] for ln in p["lines"]) + " | "
                          f"{doc['obligations']['credit'][0]} |\n")
+
+    def test_real_voicevox_same_profile_same_audio(self):
+        # roadmap step 13 (ADR-016): two episodes spoken with one voice profile (VOICEVOX style 3, speed, pitch, and a
+        # loudness target through the real ffmpeg-skill/loudness) give the same audio, and both receipts name the profile.
+        # (No docstring: see above.)
+        prof = _write(os.path.join(self.tmp.name, "narrator.json"), json.dumps(
+            {"schema": "dubbing/voice-profile@1", "id": "series-narrator", "engine": "voicevox", "voice": "3", "lang": "ja",
+             "speed": 1.05, "pitch": 0.02, "loudness_target": -16.0}))
+        script = _write(os.path.join(self.tmp.name, "ep.txt"), "第一回の講義を始めます。\n本日のテーマは睡眠です。\n")
+        docs = [narrate(NarrateRequest(script_path=script, output_path=os.path.join(self.tmp.name, f"ep{k}.wav"), lang="ja",
+                                       profile_path=prof, timeout=1200), skill=self.skill) for k in (1, 2)]
+        hashes = [sha256_file(d["output"]["path"]) for d in docs]
+        self.assertEqual(hashes[0], hashes[1])
+        for d in docs:
+            self.assertEqual((d["voice_profile"]["id"], d["provenance"]["voice_profile"]["id"]), ("series-narrator", "series-narrator"))
+            self.assertLessEqual(abs(d["voice_profile"]["loudness"]["measured_lufs"] - (-16.0)), 1.0, d["voice_profile"])
+            self.assertEqual(d["provenance"]["output"]["sha256"], hashes[0])
 
     def test_real_voicevox_speakers_and_terms(self):
         # the verified table (style ids, uuids, names) matches the real app, and a character outside it is refused

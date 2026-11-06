@@ -78,6 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--reference", help="a reference voice to speak in (voice cloning; chatterbox): needs --consent")
     n.add_argument("--consent", help="the consent record (dubbing/consent@1 JSON) of the person whose voice --reference is: who "
                                      "consented, when, for what, and the evidence files (ADR-009); there is no way to skip it")
+    n.add_argument("--profile", help="a voice profile (dubbing/voice-profile@1 JSON: id, engine, voice or consented reference, speed, pitch, "
+                        "loudness target, seed) for the same voice in every episode; flags that say otherwise are refused (ADR-016)")
     n.add_argument("--pronunciation", help="a pronunciation dictionary (dubbing/pronunciation@1 JSON: term, lang, reading, optional accent / ipa), "
                         "applied the way the engine takes it (ADR-015)")
     n.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
@@ -115,6 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"dB the programme is lowered by while a line is spoken (0 to 40, default {DEFAULT_DUCK_DB:g})")
     b.add_argument("--voice-gain", type=float, default=DEFAULT_VOICE_GAIN_DB,
                    help=f"dB added to the spoken lines in the mix (-20 to 20, default {DEFAULT_VOICE_GAIN_DB:g})")
+    b.add_argument("--profile", help="a voice profile (dubbing/voice-profile@1 JSON: id, engine, voice or consented reference, speed, pitch, "
+                        "loudness target, seed) for the same voice in every episode; flags that say otherwise are refused (ADR-016)")
     b.add_argument("--pronunciation", help="a pronunciation dictionary (dubbing/pronunciation@1 JSON: term, lang, reading, optional accent / ipa), "
                         "applied the way the engine takes it (ADR-015)")
     b.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
@@ -147,6 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--duck", type=float, default=DEFAULT_DUCK_DB,
                    help=f"dB the programme is lowered by while a description is spoken (0 to 40, default {DEFAULT_DUCK_DB:g})")
     a.add_argument("--voice-gain", type=float, default=DEFAULT_VOICE_GAIN_DB, help="dB added to the descriptions in the mix")
+    a.add_argument("--profile", help="a voice profile (dubbing/voice-profile@1 JSON: id, engine, voice or consented reference, speed, pitch, "
+                        "loudness target, seed) for the same voice in every episode; flags that say otherwise are refused (ADR-016)")
     a.add_argument("--pronunciation", help="a pronunciation dictionary (dubbing/pronunciation@1 JSON: term, lang, reading, optional accent / ipa), "
                         "applied the way the engine takes it (ADR-015)")
     a.add_argument("--translation-note", help="JSON object describing who wrote or translated the descriptions")
@@ -324,7 +330,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                          accept_unverified_terms=args.accept_unverified_voice_terms,
                                          on_overflow=args.on_overflow, timeout=args.timeout, overwrite=args.overwrite,
                                          ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline,
-                                 pronunciation_path=args.pronunciation)), as_json)
+                                 pronunciation_path=args.pronunciation, profile_path=args.profile)), as_json)
             return 0
         if args.cmd == "dub":
             _emit(dub(DubRequest(input_path=args.input, cues_path=args.cues, output_path=args.output, lang=args.lang,
@@ -335,7 +341,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  audio_stream=args.audio_stream, max_overrun=args.max_overrun, on_unfit=args.on_unfit,
                                  duck=args.duck, voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
                                  ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline,
-                                 pronunciation_path=args.pronunciation)), as_json)
+                                 pronunciation_path=args.pronunciation, profile_path=args.profile)), as_json)
             return 0
         if args.cmd == "describe":
             _emit(describe(DescribeRequest(input_path=args.input, descriptions_path=args.descriptions, output_path=args.output,
@@ -347,7 +353,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                            audio_stream=args.audio_stream, on_unfit=args.on_unfit, duck=args.duck,
                                            voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
                                            ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline,
-                                 pronunciation_path=args.pronunciation)), as_json)
+                                 pronunciation_path=args.pronunciation, profile_path=args.profile)), as_json)
             return 0
         if args.cmd == "terms":
             _emit(terms_report(args.script, args.pronunciation, args.lang), as_json)

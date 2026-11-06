@@ -702,3 +702,32 @@ Roadmap step 12: a per-project dictionary (term, reading, accent where the engin
 ### Contract changes for video-production-agent
 
 Additive only: `inputs.pronunciation`, `[--pronunciation <dict.json>]` on narrate / dub / audio-description, the `dubbing/terms` tool, `engines.registered.*.pronunciation`, and `pronunciation` in each op result. `contract_version` stays 1.0.
+
+## ADR-016 One voice per channel or series: a named voice profile, recorded in every receipt
+
+### Context
+
+Roadmap step 13: a named voice profile (engine, voice or consented reference, speed, pitch, loudness target) reused across episodes and recorded in provenance, so every episode's narration sounds the same. Done when: two runs with the same profile and text give the same audio on a deterministic engine, and the profile id is in both receipts.
+
+### Findings (2026-11-06)
+
+- **VOICEVOX 0.26.0**: the AudioQuery carries `speedScale` and `pitchScale`; synthesis from the same query is repeatable (no sampling). Two NARRATE runs of the same text and query on the official CPU image give the same WAV, byte for byte (CI `voicevox` job, below).
+- **Kokoro 0.9.4** takes `speed`; no pitch. **Chatterbox 0.1.7** has neither (exaggeration, cfg_weight and temperature are not speed or pitch) and samples. **Style-Bert-VITS2**'s `/voice` controls were not read for this step and are not used.
+- **ffmpeg-skill/loudness** (already in `TOOLS_USED`): two-pass EBU R128 normalisation, `--lufs`, the input's own sample rate kept, the output re-measured (`result.input_i`).
+
+### Decision
+
+- **A `dubbing/voice-profile@1` file**: `{schema, id, name?, engine, voice?, reference?, consent?, lang?, speed?, pitch?, loudness_target?, seed?}`, every field checked, any problem `INVALID_ARGUMENT` listing all of them. `id` is a slug. `reference` and `consent` are relative to the profile, and the consent gate (ADR-009) runs on them exactly as on the command line.
+- **The profile is the voice.** `--profile` sets the op's engine, voice, reference, consent and seed. A flag with another value is `INVALID_ARGUMENT` (the same value is accepted). A profile for other languages (`lang`) refuses the op's `--lang`. In DUB the profile is the voice of every speaker without `--speaker-voice` / `--speaker-reference`; only those lines carry it in their provenance.
+- **Controls.** `EngineSpec.controls` publishes what a request may set: VOICEVOX `speed` → `speedScale`, `pitch` → `pitchScale` (engine-native, -0.15 to 0.15); Kokoro `speed`. Any other engine refuses a non-neutral speed or pitch before any work, rather than ignoring it.
+- **Loudness.** NARRATE normalises its timeline to `loudness_target` through ffmpeg-skill/loudness and records the target and the measured result. DUB and AUDIO_DESCRIPTION record the target but do not apply it: their voice level is the mix's (`--voice-gain`, ADR-008), and the programme's loudness is audio-production-skill's.
+- **Receipts.** `voice_profile`: id, name, the file's SHA-256, engine, voice, the reference clip's SHA-256, languages and settings, in the op result, its provenance and each clip's provenance (`contract.provenance.fields`).
+- **VOICEVOX is marked `deterministic: true`**, on the CI evidence below. The neural engines stay `false`: their seed is recorded, and the same profile makes them sound alike, not identical.
+
+### Done when, checked
+
+- Two runs with the same profile and text give the same audio on a deterministic engine, and the profile id is in both receipts: **met** on the real VOICEVOX 0.26.0 with the real ffmpeg-skill/loudness in the `voicevox` CI job (`test_real_voicevox_same_profile_same_audio`: identical SHA-256, `series-narrator` in both results and provenances, loudness within 1 LU of the target), and on the fake app with WaveSkill (`tests/test_profile.py`).
+
+### Contract changes for video-production-agent
+
+Additive only: `inputs.voice_profile`, `[--profile <profile.json>]` on narrate / dub / audio-description, `engines.registered.*.controls`, VOICEVOX `deterministic: true`, and `voice_profile` in results and provenance. `contract_version` stays 1.0.

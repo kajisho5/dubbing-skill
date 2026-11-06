@@ -77,6 +77,8 @@ SPEC = EngineSpec(
     credit_required=True,
     watermark=None,
     pronunciation="user_dictionary",
+    controls=("speed", "pitch"),
+    deterministic=True,
     languages=("ja",),
     japanese="native",
     voice_cloning=False,
@@ -334,6 +336,10 @@ class VoicevoxEngine(Engine):
                 raise DubbingError("INVALID_RESULT", "VOICEVOX /audio_query did not return an AudioQuery",
                                    {"engine": self.id, "missing": absent})
             query["outputStereo"] = False                     # one mono clip per line
+            if req.params.get("speed") is not None:             # a voice profile (ADR-016): speedScale, pitchScale
+                query["speedScale"] = float(req.params["speed"])
+            if req.params.get("pitch") is not None:
+                query["pitchScale"] = float(req.params["pitch"])
             rate = int(query["outputSamplingRate"])
             data = self._post("/synthesis", {"speaker": style_id}, json.dumps(query, ensure_ascii=False).encode("utf-8"),
                               "audio/wav", MAX_WAV_BYTES)

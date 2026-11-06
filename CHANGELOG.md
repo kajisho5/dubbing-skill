@@ -2,6 +2,13 @@
 
 ## 0.1.0 - unreleased
 
+One voice per channel or series (roadmap step 13, ADR-016).
+
+- `--profile <profile.json>` on `narrate`, `dub` and `describe`: a `dubbing/voice-profile@1` file (id, engine, voice or consented reference, languages, speed, pitch, loudness target, seed). Flags that say otherwise are refused; a reference voice in a profile goes through the consent gate.
+- Engines publish their `controls`: VOICEVOX speed and pitch (`speedScale`, `pitchScale`), Kokoro speed; other engines refuse a non-neutral value. VOICEVOX is marked deterministic.
+- NARRATE normalises its timeline to the profile's loudness target through ffmpeg-skill/loudness. DUB and AUDIO_DESCRIPTION record it.
+- `voice_profile` (id, file hash, settings) in every result and provenance. Tests: two runs with one profile give the same audio on the fake and, in the `voicevox` CI job, on the real VOICEVOX with the real ffmpeg-skill/loudness.
+
 Pronunciation dictionary for terms (roadmap step 12, ADR-015).
 
 - `--pronunciation <dict.json>` on `narrate`, `dub` and `describe`: a per-project `dubbing/pronunciation@1` dictionary (term, lang, reading, optional accent and IPA), used only for the op's `--lang`; none is built in.
