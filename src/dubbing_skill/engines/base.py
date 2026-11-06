@@ -56,6 +56,8 @@ class EngineSpec:
     execution_mode: str = "local"
     network_required: bool = False            # at run time; no engine registered here needs it
     deterministic: bool = False               # neural TTS samples; a fixed seed is recorded, not a bit-exact promise
+    pronunciation: str = "respell"            # how the pronunciation dictionary reaches it (pronunciation.py, ADR-015):
+                                              # "user_dictionary" | "phoneme_hint" | "respell"
     reference_kind: str = "audio"             # what a reference voice is: "audio" (a clip, probed through ffmpeg-skill) or
                                               # "model" (a voice model trained on the person, Style-Bert-VITS2, ADR-011)
 

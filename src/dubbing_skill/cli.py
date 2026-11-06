@@ -18,6 +18,9 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   dubbing describe <video> <descriptions> --lang ja -o <out.mp4> (--gaps gaps.json | --detect-gaps) --json
                               audio description (ADR-010): each description spoken from its cue's start, only inside a gap
                               (the caller's, or a quiet stretch found by ffmpeg-skill/silence), over the ducked programme
+  dubbing terms <script> --pronunciation <dict.json> --lang ja --json
+                              the pronunciation dictionary terms each line contains (ADR-015); narrate, dub and describe
+                              take the same dictionary with --pronunciation and apply it the way their engine takes it
   dubbing fit <cues> <clip>... --json
                               timing fit (ADR-007): one clip per cue measured through ffmpeg-skill/probe against its cue
                               window; the tempo each needs (at most --max-tempo), the silence around it, and every line
@@ -42,6 +45,7 @@ from .doctor import doctor, engines_report
 from .errors import DubbingError
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB
 from .ops import OVERFLOW_POLICIES, NarrateRequest, narrate
+from .pronunciation import terms_report
 from .service import DEFAULT_TIMEOUT
 from .timing import DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, TEMPO_LIMIT, UNFIT_POLICIES, FitRequest, fit
 
@@ -74,6 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--reference", help="a reference voice to speak in (voice cloning; chatterbox): needs --consent")
     n.add_argument("--consent", help="the consent record (dubbing/consent@1 JSON) of the person whose voice --reference is: who "
                                      "consented, when, for what, and the evidence files (ADR-009); there is no way to skip it")
+    n.add_argument("--pronunciation", help="a pronunciation dictionary (dubbing/pronunciation@1 JSON: term, lang, reading, optional accent / ipa), "
+                        "applied the way the engine takes it (ADR-015)")
     n.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
     n.add_argument("--seed", type=int, default=0, help="sampling seed, recorded (default 0)")
     n.add_argument("--on-overflow", choices=OVERFLOW_POLICIES, default="fail",
@@ -109,6 +115,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"dB the programme is lowered by while a line is spoken (0 to 40, default {DEFAULT_DUCK_DB:g})")
     b.add_argument("--voice-gain", type=float, default=DEFAULT_VOICE_GAIN_DB,
                    help=f"dB added to the spoken lines in the mix (-20 to 20, default {DEFAULT_VOICE_GAIN_DB:g})")
+    b.add_argument("--pronunciation", help="a pronunciation dictionary (dubbing/pronunciation@1 JSON: term, lang, reading, optional accent / ipa), "
+                        "applied the way the engine takes it (ADR-015)")
     b.add_argument("--translation-note", help="JSON object describing who translated the text (recorded in the provenance)")
     b.add_argument("--seed", type=int, default=0, help="sampling seed, recorded (default 0)")
     b.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"time limit in seconds (default {DEFAULT_TIMEOUT:g})")
@@ -139,6 +147,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--duck", type=float, default=DEFAULT_DUCK_DB,
                    help=f"dB the programme is lowered by while a description is spoken (0 to 40, default {DEFAULT_DUCK_DB:g})")
     a.add_argument("--voice-gain", type=float, default=DEFAULT_VOICE_GAIN_DB, help="dB added to the descriptions in the mix")
+    a.add_argument("--pronunciation", help="a pronunciation dictionary (dubbing/pronunciation@1 JSON: term, lang, reading, optional accent / ipa), "
+                        "applied the way the engine takes it (ADR-015)")
     a.add_argument("--translation-note", help="JSON object describing who wrote or translated the descriptions")
     a.add_argument("--seed", type=int, default=0, help="sampling seed, recorded (default 0)")
     a.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"time limit in seconds (default {DEFAULT_TIMEOUT:g})")
@@ -146,6 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     a.add_argument("--offline", action="store_true")
     a.add_argument("--json", action="store_true")
+    t = sub.add_parser("terms", help="which pronunciation dictionary terms each line of a script contains (no engine, no media)")
+    t.add_argument("script", help="cues (.json, .srt, .vtt) or plain text (.txt)")
+    t.add_argument("--pronunciation", required=True, help="the dictionary (dubbing/pronunciation@1 JSON, ADR-015)")
+    t.add_argument("--lang", required=True, help="the language the script is in; only entries for it are used")
+    t.add_argument("--json", action="store_true")
     f = sub.add_parser("fit", help="timing fit: measure one clip per cue against its window; tempo, silence, lines that cannot fit")
     f.add_argument("cues", help="cues (.json, .srt, .vtt): the windows to fit into")
     f.add_argument("clips", nargs="+", help="one audio clip per cue, in cue order (measured through ffmpeg-skill/probe)")
@@ -242,6 +257,13 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  credit: {c}")
         for w in doc["warnings"]:
             print(f"  warning: {w}")
+    elif doc.get("op") == "terms":
+        sm = doc["summary"]
+        print(f"{doc['input']['path']}: {sm['lines_with_terms']} of {doc['input']['lines']} line(s) contain dictionary terms "
+              f"({sm['occurrences']} occurrence(s)); unused: {sm['terms_unused']}")
+        for ln in doc["lines"]:
+            if ln["terms"]:
+                print(f"  line {ln['index']}: " + ", ".join(f"{t['term']} -> {t['reading']}" for t in ln["terms"]))
     elif doc.get("op") == "fit":
         sm = doc["summary"]
         print(f"{doc['input']['cues']}: {sm['lines']} line(s): {sm['fit']} fit, {sm['tempo']} sped up "
@@ -301,7 +323,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                          translation_note=_note(args.translation_note), seed=args.seed,
                                          accept_unverified_terms=args.accept_unverified_voice_terms,
                                          on_overflow=args.on_overflow, timeout=args.timeout, overwrite=args.overwrite,
-                                         ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
+                                         ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline,
+                                 pronunciation_path=args.pronunciation)), as_json)
             return 0
         if args.cmd == "dub":
             _emit(dub(DubRequest(input_path=args.input, cues_path=args.cues, output_path=args.output, lang=args.lang,
@@ -311,7 +334,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  speaker_consents=_pairs(args.speaker_consent, "--speaker-consent"), translation_note=_note(args.translation_note), seed=args.seed,
                                  audio_stream=args.audio_stream, max_overrun=args.max_overrun, on_unfit=args.on_unfit,
                                  duck=args.duck, voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
-                                 ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
+                                 ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline,
+                                 pronunciation_path=args.pronunciation)), as_json)
             return 0
         if args.cmd == "describe":
             _emit(describe(DescribeRequest(input_path=args.input, descriptions_path=args.descriptions, output_path=args.output,
@@ -322,7 +346,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                                            translation_note=_note(args.translation_note), seed=args.seed,
                                            audio_stream=args.audio_stream, on_unfit=args.on_unfit, duck=args.duck,
                                            voice_gain=args.voice_gain, timeout=args.timeout, overwrite=args.overwrite,
-                                           ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline)), as_json)
+                                           ffmpeg_skill_dir=args.ffmpeg_skill, offline=args.offline,
+                                 pronunciation_path=args.pronunciation)), as_json)
+            return 0
+        if args.cmd == "terms":
+            _emit(terms_report(args.script, args.pronunciation, args.lang), as_json)
             return 0
         if args.cmd == "fit":
             _emit(fit(FitRequest(cues_path=args.cues, clip_paths=list(args.clips), lang=args.lang, max_tempo=args.max_tempo,

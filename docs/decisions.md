@@ -669,3 +669,36 @@ Additive only: `dubbing/fit` argv gains `[--rate]` and a `rate` entry; DUB's `fi
 ### Tests
 
 `tests/test_localise.py`: units and morae, the voice model (linear, proportional), budgets that fit their room and are the most that do, the rate report (fits / budget / tempo-only / empty clip), `fit --rate` on WaveSkill and its CLI refusal, the en→ja chain on a WAV programme with the fake Chatterbox, the consent gate, doctor's tempo report, and the integration test with subtitle-skill. CI checks subtitle-skill main out in the integration, engines and voicevox jobs (`DUBBING_SUBTITLE_SKILL_DIR`), so the chain never skips there.
+
+## ADR-015 Pronunciation dictionary: one file per project, taken by each engine its own way, checked against the engine's reading
+
+### Context
+
+Roadmap step 12: a per-project dictionary (term, reading, accent where the engine takes it) applied to every engine that accepts one (VOICEVOX user dictionary, phoneme hints elsewhere), and a check that lists the dictionary terms each line contains, so medical terms, drug names and people's names are not misread again and again. Done when: a fixture with three medical terms is read as the dictionary says (checked by transcription-skill on the output).
+
+### Findings (2026-11-06)
+
+- **VOICEVOX ENGINE 0.26.0** (`app/routers/user_dict.py`): `POST /user_dict_word?surface=&pronunciation=&accent_type=&word_type=&priority=` returns the new word's UUID; `DELETE /user_dict_word/{uuid}` removes it (204); `GET /user_dict` lists the words. `pronunciation` is katakana, `accent_type` is the accent nucleus (at most the reading's morae), `priority` 0–10. `/audio_query` then reads the word as given, and the AudioQuery's `kana` (AquesTalk notation) shows what it read. Long vowels come back spelled as they sound (コウクウ is read back as コ'オクウ).
+- **Kokoro 0.9.4**: misaki's English G2P takes inline phonemes, `[word](/phonemes/)`. Its Japanese path has no such input.
+- **Chatterbox 0.1.7** and **Style-Bert-VITS2's `/voice`** take plain text only; neither has a dictionary or a phoneme input on the path this skill uses.
+- **transcription-skill 0.8.0** takes a custom vocabulary (`--vocabulary`, `{written form: [readings]}`) for engines that support it; its output is written text (kanji), not readings.
+
+### Decision
+
+- **One file, `dubbing/pronunciation@1`**: `{schema, name?, entries: [{term, lang, reading, accent?, ipa?, note?}]}`, every entry checked, any problem `INVALID_ARGUMENT` listing all of them. Every entry names its BCP-47 language; an entry for `en` serves `en-US` and `en-GB`, one for `en-GB` only `en-GB`. **Nothing is built in and no language is the default**: Japanese readings are data a project writes, like any other language's. `reading` is in the language's own script (Japanese: katakana; English: a respelling).
+- **Matching**: longest term first, never overlapping; whole words, case-insensitive, in scripts written with spaces; anywhere in CJK, kana and similar scripts.
+- **Each engine its own way** (`EngineSpec.pronunciation`, published in the contract):
+  - `user_dictionary` (VOICEVOX): each entry the run needs is added with priority 10 (`PROPER_NOUN`), and removed in a `finally` after the batch. An entry without `accent` gets the app's own accent for the reading (`POST /accent_phrases`, recorded as `accent_source: engine`). A word that cannot be removed is listed in `pronunciation.user_dictionary.left` and warned about. A reading that is not katakana, or an accent past the reading's last mora, is refused before any engine work.
+  - `phoneme_hint` (Kokoro): an English entry with `ipa` becomes `[term](/ipa/)`; any other entry is respelled.
+  - `respell` (Chatterbox, Style-Bert-VITS2): the term is replaced by its reading in the text the engine reads.
+- **The caller's text is never changed.** The provenance keeps its hash; each clip adds `parameters.pronunciation` (the dictionary's hash, the method, the terms and the spoken text's hash when it differs).
+- **The check.** `dubbing terms <script> --pronunciation <dict> --lang <lang>`: per line the terms it contains (and where), the dictionary terms the script never uses, and the dictionary as transcription-skill's `--vocabulary`. Every op result carries `pronunciation`: per line its terms, `read_as` (the engine's own reading, VOICEVOX only) and per term `confirmed` (the reading is in `read_as`, after folding long vowels and ヲ / ヂ / ヅ the way VOICEVOX spells them; null for engines that give no reading back), and `summary.unconfirmed`, warned about.
+
+### Done when, checked
+
+- **Met, through the engine's own reading**: on the fixture `tests/fixtures/pronunciation/medical_ja.{json,txt}` (口腔 → コウクウ, 腹腔 → フククウ, 貼付 → チョウフ, three lines, four occurrences) the real VOICEVOX 0.26.0 in the `voicevox` CI job reads every occurrence as the dictionary says, and its user dictionary holds none of the words afterwards (`test_real_voicevox_reads_the_dictionary_terms`). On the fake app the same run checks the request shapes, the accents and the clean-up.
+- **Not met: the check by transcription-skill on the output.** It needs a speech-recognition model in CI (none is installed here, and the skill never downloads), and its output is written text: 口腔 read as こうこう or as コウクウ both come back as 口腔, so a transcript cannot tell the two readings apart for these terms. What reaches transcription-skill today is `dubbing terms`' `transcription_vocabulary`, for a reviewer's check.
+
+### Contract changes for video-production-agent
+
+Additive only: `inputs.pronunciation`, `[--pronunciation <dict.json>]` on narrate / dub / audio-description, the `dubbing/terms` tool, `engines.registered.*.pronunciation`, and `pronunciation` in each op result. `contract_version` stays 1.0.

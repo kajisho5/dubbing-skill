@@ -17,6 +17,7 @@ from .describe import (DEFAULT_MIN_GAP, DEFAULT_SILENCE_THRESHOLD, DESCRIBE_SCHE
 from .dub import ALIGN_TOLERANCE, DUB_SCHEMA, DUB_TEMPO, TEMPO_GAP
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, MAX_DUCK_DB, MAX_VOICE_GAIN_DB
 from .ops import NARRATE_SCHEMA
+from .pronunciation import METHODS as PRONUNCIATION_METHODS, PRONUNCIATION_SCHEMA, TERMS_SCHEMA
 from .provenance import ENGINE_FIELDS
 from .rate import DIGIT_MORAE, KANJI_MORAE, LATIN_MORAE, MORA_LANGS, RENDER_TEMPO
 from .timing import (DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, FIT_SCHEMA, MAX_OVERRUN_LIMIT, RENDER_GAP, TEMPO_LIMIT,
@@ -32,6 +33,27 @@ CUES_INPUT = {
     "lang": "BCP-47 language of the text (ja, en, ...); must be one of the engine's languages",
     "translation": "done by the caller before this skill is called; optionally described with --translation-note "
                    "(engine, reviewer) so it is recorded in the provenance. No engine is chosen here",
+}
+# The pronunciation dictionary every op takes (pronunciation.py, roadmap step 12, ADR-015). None is built in.
+PRONUNCIATION_INPUT = {
+    "schema": PRONUNCIATION_SCHEMA,
+    "format": "JSON file {schema, name?, entries: [{term, lang, reading, accent?, ipa?, note?}]}",
+    "fields": {"term": "the written form, as it appears in the cues", "lang": "BCP-47; an entry for en serves en-US and en-GB",
+               "reading": "how to say it, in the language's own script (Japanese: katakana; English: a respelling)",
+               "accent": "optional accent nucleus in morae (0 = flat); engines with a user dictionary only (VOICEVOX)",
+               "ipa": "optional IPA phonemes; engines that take phonemes only (Kokoro, English)"},
+    "default": None,
+    "flag": "--pronunciation <dict.json> (narrate, dub, describe, terms)",
+    "matching": "longest term first, never overlapping; whole words, case-insensitive, in scripts written with spaces; "
+                "anywhere in CJK scripts",
+    "methods": {"user_dictionary": "added to the engine's own user dictionary for the run and removed after it; the "
+                                   "engine's reading of each line is recorded and each term checked against it",
+                "phoneme_hint": "given as inline phonemes ([term](/ipa/)) when the entry has ipa; else respelled",
+                "respell": "the term replaced by its reading in the text the engine reads"},
+    "method_values": list(PRONUNCIATION_METHODS),
+    "result": "pronunciation: dictionary, method, lines[{index, terms[{term, reading, how, confirmed}], read_as}], summary; "
+              "the cue text is never changed (its hash stays in the provenance; the spoken text's hash is added)",
+    "adr": "docs/decisions.md ADR-015",
 }
 # What a consent record must hold (consent.py, ADR-009). Every field is checked; any problem is CONSENT_REQUIRED.
 CONSENT_RECORD = {
@@ -60,7 +82,7 @@ _OP_TOOLS = {
                            "the engine's built-in voice (voicevox: a style id, default 3), or a reference voice (--reference, "
                            "chatterbox) with its owner's consent record (--consent, CONSENT_RECORD, ADR-009)"],
                 "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox|voicevox]",
-                         "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--accept-unverified-voice-terms]", "[--translation-note <json>]", "[--seed 0]",
+                         "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--accept-unverified-voice-terms]", "[--pronunciation <dict.json>]", "[--translation-note <json>]", "[--seed 0]",
                          "[--on-overflow fail|shift]",
                          "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
                 "refused": {"--reference without a consent record that checks out": "CONSENT_REQUIRED (ADR-009); no flag skips it",
@@ -88,7 +110,8 @@ _OP_TOOLS = {
                      "[--reference <voice.wav> --consent <consent.json>]", "[--speaker-reference <speaker>=<voice.wav>]...",
                      "[--speaker-consent <speaker>=<consent.json>]...",
                      "[--audio-stream 0]", f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|keep]",
-                     f"[--duck {DEFAULT_DUCK_DB:g}]", f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--translation-note <json>]",
+                     f"[--duck {DEFAULT_DUCK_DB:g}]", f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--pronunciation <dict.json>]",
+                     "[--translation-note <json>]",
                      "[--seed 0]", "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
             "refused": {"a reference voice without a consent record that checks out": "CONSENT_REQUIRED (ADR-009); no flag skips it",
                         "plain text": "INVALID_ARGUMENT: each line replaces the dialogue of its segment, so cues are needed",
@@ -120,7 +143,8 @@ _OP_TOOLS = {
                  f"[--silence-threshold {DEFAULT_SILENCE_THRESHOLD:g}]", "[--engine chatterbox|voicevox|kokoro|style_bert_vits2]",
                  "[--voice <id>]", "[--accept-unverified-voice-terms]", "[--reference <voice.wav> --consent <consent.json>]",
                  "[--audio-stream 0]", "[--on-unfit fail|skip]", f"[--duck {DEFAULT_DUCK_DB:g}]",
-                 f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--seed 0]", "[--timeout 3600]", "[--overwrite]",
+                 f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--pronunciation <dict.json>]", "[--seed 0]", "[--timeout 3600]",
+                 "[--overwrite]",
                  "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
         "refused": {"a description that starts outside every gap": "INVALID_ARGUMENT, before the engine runs",
                     "a description longer than its window": "TIMING_OVERFLOW unless --on-unfit skip (left out, reported)",
@@ -173,6 +197,14 @@ def tools() -> list:
                             "the line; at --max-tempo (budget) and at tempo 1.0 (budget_at_tempo_1)",
                   "render_tempo": RENDER_TEMPO, "result": "rate, and unfit[].budget"},
          "render": RENDER_GAP, "schema": FIT_SCHEMA},
+        {"tool_id": f"{SKILL_ID}/terms", "role": "analysis", "writes_media": False, "mutates_input": False, "deterministic": True,
+         "implemented": True, "roadmap_step": 12,
+         "description": "Which pronunciation dictionary terms each line of a script contains (ADR-015), with the dictionary's "
+                        "terms the script never uses and the dictionary as transcription-skill's --vocabulary; no engine, "
+                        "no media",
+         "inputs": ["cues (CUES_INPUT) or plain text", "a pronunciation dictionary (PRONUNCIATION_INPUT)"],
+         "argv": ["terms", "<cues.json|cues.srt|cues.vtt|text.txt>", "--pronunciation <dict.json>", "--lang <ja>", "--json"],
+         "schema": TERMS_SCHEMA},
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engines, ffmpeg-skill) and how to get it; never downloads",
          "argv": ["doctor", "[--offline]", "[--ffmpeg-skill <dir>]", "--json"], "schema": DOCTOR_SCHEMA},
@@ -222,7 +254,7 @@ def contract() -> Dict[str, Any]:
         "provides": [{"id": CAPABILITY_IDS[op], "lifecycle": "EXPERIMENTAL" if IMPLEMENTED_OPS[op] else "PROPOSED",
                       "tool_id": f"{SKILL_ID}/{op.replace('_', '-')}"} for op in CAPABILITY_IDS],
         "dependencies": deps,
-        "inputs": {"cues": CUES_INPUT, "translation": dict(TRANSLATION, decided_in="subtitle-skill (MT engine ADR, open)")},
+        "inputs": {"cues": CUES_INPUT, "pronunciation": PRONUNCIATION_INPUT, "translation": dict(TRANSLATION, decided_in="subtitle-skill (MT engine ADR, open)")},
         "not_provided": ["translation / machine translation of the script (caller input, ADR-003; subtitle-skill owns 字幕翻訳)",
                          "transcription (transcription-skill)", "speaker diarization (diarization-skill)",
                          "subtitle files and cue shaping (subtitle-skill)",

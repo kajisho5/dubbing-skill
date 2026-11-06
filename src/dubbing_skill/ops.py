@@ -45,6 +45,7 @@ from .engines import DEFAULT_ENGINE, engines_for, get_engine
 from .engines.base import CONSENT_PARAM, OK, Engine, EngineRequest
 from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill, SkillInfo
+from .pronunciation import prepare as prepare_pronunciation
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
 
@@ -73,6 +74,7 @@ class NarrateRequest:
     overwrite: bool = False
     ffmpeg_skill_dir: Optional[str] = None
     offline: bool = False
+    pronunciation_path: Optional[str] = None  # a dubbing/pronunciation@1 dictionary (ADR-015)
 
 
 MIN_REFERENCE_SECONDS = 1.0         # a reference voice shorter than this cannot carry a voice
@@ -340,14 +342,15 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
     reference, voice_params = voice_request_fields(req.reference_path, req.consent_path)
     _check_numbers(req)
     src, dst = check_paths(req.script_path, req.output_path, req.overwrite)
-    not_an_output(dst, req.reference_path, req.consent_path)
+    not_an_output(dst, req.reference_path, req.consent_path, req.pronunciation_path)
     script = parse_script(src, req.lang)
     engine, report = select_engine("narrate", req.engine, req.offline)
     params: Dict[str, Any] = dict(voice_params, seed=req.seed)
     if req.accept_unverified_terms:
         params["accept_unverified_terms"] = True
-    probe_reqs = [EngineRequest(op="narrate", text=line.text, lang=req.lang, output_path="", voice=req.voice,
-                                reference_audio=reference, params=params) for line in script.lines]
+    pron = prepare_pronunciation(req.pronunciation_path, engine, req.lang, [line.text for line in script.lines])
+    probe_reqs = [EngineRequest(op="narrate", text=pron.texts[k], lang=req.lang, output_path="", voice=req.voice,
+                                reference_audio=reference, params=dict(params, **pron.params[k])) for k, line in enumerate(script.lines)]
     for r in probe_reqs:
         engine.check_request(r)                   # the consent record and the reference clip's hash, before any work
     timeout = float(req.timeout)
@@ -361,7 +364,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         clip_dir = os.path.join(run_dir, "clips")
         os.mkdir(clip_dir)
         reqs = [EngineRequest(op="narrate", text=r.text, lang=r.lang, output_path=os.path.join(clip_dir, f"{k:04d}.wav"),
-                              voice=r.voice, reference_audio=r.reference_audio, params=dict(params)) for k, r in enumerate(probe_reqs)]
+                              voice=r.voice, reference_audio=r.reference_audio, params=dict(r.params)) for k, r in enumerate(probe_reqs)]
         results = run_engine_batch(engine.id, reqs, timeout, run_dir)
         clip_facts = []
         for k, (r, res) in enumerate(zip(reqs, results)):
@@ -384,6 +387,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
             a = facts["audio"]
             parameters = {"lang": req.lang, "seed": res.extra.get("seed", req.seed), "engine_parameters": res.extra.get("parameters"),
                           "sample_rate": a.get("sample_rate"), "duration": facts.get("duration"), "line": line.index}
+            if pron.dictionary is not None:
+                parameters["pronunciation"] = pron.provenance(line.index)
             clips.append({"index": line.index, "duration": facts.get("duration"), "sample_rate": a.get("sample_rate"),
                           "channels": a.get("channels"), "start": plan["segments"][line.index]["start"],
                           "provenance": build_provenance(op="narrate", engine=engine_doc, text=line.text, output_path=r.output_path,
@@ -401,6 +406,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         parameters = {"lang": req.lang, "seed": req.seed, "mode": script.mode, "lines": len(script.lines),
                       "overflow_policy": plan["overflow_policy"], "sample_rate": rate, "channels": TIMELINE_CHANNELS,
                       "engine_parameters": first.extra.get("parameters"), "clips_sha256": [c["provenance"]["output"]["sha256"] for c in clips]}
+        if pron.dictionary is not None:
+            parameters["pronunciation"] = pron.provenance()
         full_text = "\n".join(line.text for line in script.lines)
         credits = unique_credits(c["provenance"]["credits"] for c in clips)
         provenance = build_provenance(op="narrate", engine=engine_doc, text=full_text, output_path=timeline, parameters=parameters,
@@ -411,7 +418,8 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
     out_audio = out_facts.get("audio") or {}
-    warnings = []
+    pronunciation = pron.report(results)
+    warnings = pron.warnings(pronunciation)
     if plan["overflows"]:
         warnings.append(f"{len(plan['overflows'])} line(s) were pushed back (--on-overflow shift); the last drift is "
                         f"{plan['segments'][-1].get('drift', 0.0):.3f}s")
@@ -438,6 +446,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
                                                    "credit_required", "watermark")},
         "timeline": plan,
         "clips": clips,
+        "pronunciation": pronunciation,
         "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
                         "credits": credits, "watermark": watermark},
         "steps": steps,

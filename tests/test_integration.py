@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -409,6 +410,29 @@ class RealVoicevoxTests(unittest.TestCase):
         self.assertEqual(doc["obligations"]["credit"], ["VOICEVOX:ずんだもん"])
         facts = self.skill.probe(out)
         self.assertLessEqual(abs(float(facts["audio"]["duration"]) - float(facts["video"]["duration"])), 0.1, facts)
+
+    def test_real_voicevox_reads_the_dictionary_terms(self):
+        # roadmap step 12 (ADR-015): three medical terms whose everyday reading differs (口腔, 腹腔, 貼付) are added to the
+        # app's user dictionary for the run, read as the dictionary says (the app's own reading of each line, its
+        # AudioQuery kana, contains each reading) and removed from the app again. (No docstring: see above.)
+        fixtures = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "pronunciation")
+        out = os.path.join(self.tmp.name, "medical.wav")
+        doc = narrate(NarrateRequest(script_path=os.path.join(fixtures, "medical_ja.txt"), output_path=out, lang="ja",
+                                     engine="voicevox", pronunciation_path=os.path.join(fixtures, "medical_ja.json"), timeout=1200),
+                      skill=self.skill)
+        p = doc["pronunciation"]
+        self.assertEqual((p["summary"]["terms"], p["summary"]["confirmed"], p["summary"]["unconfirmed"]), (4, 4, []), p)
+        self.assertEqual((p["user_dictionary"]["removed"], p["user_dictionary"]["left"]), (3, []), p["user_dictionary"])
+        from dubbing_skill.engines.lookup import loopback_get_json
+        status, words, err = loopback_get_json(voicevox.base_url(), "/user_dict", timeout=10.0)
+        self.assertEqual((status, err), (200, None))
+        self.assertFalse({"口腔", "腹腔", "貼付"} & {unicodedata.normalize("NFKC", w.get("surface", "")) for w in words.values()}, words)
+        log = os.environ.get("DUBBING_MEASURE_LOG")
+        if log:
+            with open(log, "a", encoding="utf-8") as fh:
+                fh.write(f"| ja (dictionary) | {doc['input']['lines']} | {doc['output']['duration']:.2f} | "
+                         f"{doc['output']['expected_duration']:.2f} | - | " + " / ".join(ln["read_as"] for ln in p["lines"]) + " | "
+                         f"{doc['obligations']['credit'][0]} |\n")
 
     def test_real_voicevox_speakers_and_terms(self):
         # the verified table (style ids, uuids, names) matches the real app, and a character outside it is refused

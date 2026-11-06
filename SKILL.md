@@ -33,6 +33,8 @@ Run `dubbing <command>` (installed by `pip install -e .`; stdlib only), or `pyth
 | "will these lines fit their cues?" | `dubbing fit cues.json line0.wav line1.wav --on-unfit report --json` (writes nothing) |
 | "how short must the Japanese be to fit?" | `dubbing fit ja.srt line0.wav line1.wav --lang ja --rate --on-unfit report --json`: `rate.lines[].budget` (characters, morae) per line that does not fit |
 | "localise this talk into Japanese" (translate → dub → subtitles) | subtitle-skill `translate` (source cues → `ja.srt`) → `dubbing dub talk.mp4 ja.srt --lang ja --source-cues en.srt -o talk.ja.mp4 --on-unfit keep --json` → for each line in `kept_original`, ask `translate` once more for a line within `fit.unfit[].budget` and dub again → subtitle-skill `mux` the ja cues into the dubbed video. One cue list throughout: never re-time the translation |
+| "say these medical terms / names correctly" | write them in a `dubbing/pronunciation@1` dictionary (term, lang, reading, optional accent / ipa) and add `--pronunciation terms.json` to `narrate`, `dub` or `describe`; check `pronunciation.summary` in the result |
+| "which terms in this script are in the dictionary?" | `dubbing terms script.txt --pronunciation terms.json --lang ja --json` (no engine, writes nothing) |
 | "which engines can I use here" | `dubbing engines --json` |
 | "what can this skill do" (machine-readable) | `dubbing contract --json` (alias `skill --json`) |
 
@@ -71,6 +73,7 @@ Report numbers from the output document, not from memory.
 - VOICEVOX characters other than ずんだもん and 四国めたん are `TERMS_UNVERIFIED`. Only pass `--accept-unverified-voice-terms` after the user has checked that character's terms. It does nothing for consent.
 - Kokoro's Japanese is weak (graded C+ to C-). Prefer Chatterbox or VOICEVOX for Japanese.
 - `obligations.credit` is empty for Chatterbox. Its obligation is the watermark. Never strip or re-encode it away.
+- A pronunciation dictionary is the caller's data, per project and per language. Never invent readings for the user, and never apply a Japanese dictionary to another `--lang`: only entries for the op's language are used. With VOICEVOX, `pronunciation.summary.unconfirmed` lists terms the engine still read otherwise; for the other engines `confirmed` is null (they give no reading back), so listen or check with transcription-skill.
 - The output must not exist unless you pass `--overwrite`. An output equal to any input is refused.
 
 ## Boundaries

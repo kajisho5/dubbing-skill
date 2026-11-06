@@ -2,6 +2,13 @@
 
 ## 0.1.0 - unreleased
 
+Pronunciation dictionary for terms (roadmap step 12, ADR-015).
+
+- `--pronunciation <dict.json>` on `narrate`, `dub` and `describe`: a per-project `dubbing/pronunciation@1` dictionary (term, lang, reading, optional accent and IPA), used only for the op's `--lang`; none is built in.
+- Each engine takes it its own way (`EngineSpec.pronunciation`): VOICEVOX through its user dictionary (`POST /user_dict_word` for the run, removed after it; the engine's own reading of each line is recorded and each term checked against it), Kokoro as misaki inline phonemes for English entries with `ipa`, Chatterbox and Style-Bert-VITS2 by respelling. The cue text and its hash are unchanged; the spoken text's hash is added to the provenance.
+- `dubbing terms <script> --pronunciation <dict.json> --lang <lang>`: the dictionary terms each line contains, the unused ones, and the dictionary as transcription-skill's `--vocabulary`.
+- Tests: the dictionary checks, matching per script, each engine's method on the fakes, and in the `voicevox` CI job the real engine reading three medical terms (口腔, 腹腔, 貼付) as the dictionary says and leaving its user dictionary as it was.
+
 Localise in one run: translate → dub → subtitles, speech rate fitted (roadmap step 11, ADR-014).
 
 - `dubbing fit --rate --lang <lang>`: each line's length in the target language (spoken characters; morae for Japanese, kana exact, kanji / digits / Latin letters estimated), the voice's speaking rate measured on the clips (overhead + seconds per unit), and for each line that does not fit, a length budget at `--max-tempo` and at tempo 1.0. Unfit entries and `TIMING_OVERFLOW` details carry the budget.
