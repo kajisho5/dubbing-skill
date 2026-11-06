@@ -39,8 +39,9 @@ jobs:
           python -c "import json; c=json.load(open('contract.json', encoding='utf-8')); assert {p['id']: p['lifecycle'] for p in c['provides']}=={'speech.narrate':'EXPERIMENTAL','speech.dub':'EXPERIMENTAL','speech.audio_description':'EXPERIMENTAL'}, c['provides']; assert c['policy']['consent_record']['bypass'] is None; assert c['errors']['CONSENT_REQUIRED']['exit_code']==2"
 
   integration:
-    # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract, probe and join) and
-    # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001): NARRATE,
+    # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract, probe and join),
+    # AI-video-production-OS (registry conformance checks) and subtitle-skill main (translate and mux in the localise
+    # chain, roadmap step 11, ADR-014; run from its source with engine memory, no model). No engine and no weights are installed (ADR-001): NARRATE,
     # DUB and AUDIO_DESCRIPTION run on the fake Chatterbox, VOICEVOX, Kokoro and Style-Bert-VITS2, the media through the
     # real ffmpeg-skill (probe, join, audio, cut, silence) on test videos made with FFmpeg's own sources. Nothing may skip here except the real-engine tests, which run in
     # `engines` (Chatterbox) and `voicevox`. Run against ffmpeg-skill main and the 3.0.0 release pinned by commit (ADR-013).
@@ -63,6 +64,10 @@ jobs:
         with:
           repository: kajisho5/AI-video-production-OS
           path: vendor/AI-video-production-OS
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/subtitle-skill
+          path: vendor/subtitle-skill
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -72,14 +77,15 @@ jobs:
         env:
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
+          DUBBING_SUBTITLE_SKILL_DIR: ${{ github.workspace }}/vendor/subtitle-skill
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee test.log
           ! grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (Chatterbox|VOICEVOX)"
-      - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0)
+      - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0; DUB renders at tempo 1.0, ADR-014)
         run: |
           dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
-          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4; o=d['checks']['operations']; assert all(o[k]['implemented'] for k in ('narrate','dub','audio_description')), o; assert o['audio_description']['inputs']['detect_gaps']['problem'] is None, o['audio_description']"
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4; o=d['checks']['operations']; assert all(o[k]['implemented'] for k in ('narrate','dub','audio_description')), o; assert o['audio_description']['inputs']['detect_gaps']['problem'] is None, o['audio_description']; t=o['dub']['tempo']; assert t['rendered']==1.0 and t['above_1']['ready'] is False and t['above_1']['ffmpeg_skill']['used'] is False, t"
 
   engines:
     # Linux only, the real Chatterbox (ADR-005): chatterbox-tts 0.1.7 in its own virtual environment, as the README
@@ -104,6 +110,10 @@ jobs:
         with:
           repository: kajisho5/AI-video-production-OS
           path: vendor/AI-video-production-OS
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/subtitle-skill
+          path: vendor/subtitle-skill
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -152,6 +162,7 @@ jobs:
           DUBBING_REAL_CHATTERBOX: "1"
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
+          DUBBING_SUBTITLE_SKILL_DIR: ${{ github.workspace }}/vendor/subtitle-skill
         run: |
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
@@ -184,6 +195,10 @@ jobs:
         with:
           repository: kajisho5/AI-video-production-OS
           path: vendor/AI-video-production-OS
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/subtitle-skill
+          path: vendor/subtitle-skill
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -208,6 +223,7 @@ jobs:
           DUBBING_REAL_VOICEVOX: "1"
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
+          DUBBING_SUBTITLE_SKILL_DIR: ${{ github.workspace }}/vendor/subtitle-skill
         run: |
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"

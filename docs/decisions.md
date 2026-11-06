@@ -631,3 +631,41 @@ published contract does not change.
 **Python / FFmpeg / CI.** No job combined ffmpeg-skill with Python 3.9. The unit jobs (3.9 / 3.12) never run it.
 The integration job runs Python 3.12 on ubuntu-24.04 (FFmpeg 6.1), and becomes a matrix over ffmpeg-skill main and
 3.0.0 (pinned by commit). Python 3.9 stays supported by this skill.
+
+## ADR-014 Localise in one run: translate → dub → subtitles on one cue list, with a length budget per line that does not fit
+
+### Context
+
+Roadmap step 11: the chain source cues → subtitle-skill `translate` → DUB → the translated cues as a soft track through subtitle-skill `mux`, all on one cue list. Skill side: `dubbing fit --rate` measures the synthesised lines and the voice's speaking rate, reports per cue whether it fits at a tempo up to `--max-tempo`, and gives each line that does not a length budget in the target language (characters, and morae for Japanese), so the caller can ask `translate` for a shorter line instead of speeding the voice up. Agent side (video-production-agent): run the chain, re-ask the translation once with the budget, report what still does not fit. Done when: on an en→ja fixture every line either fits its cue or is reported with its budget; the dubbed video, its ja soft track and the cue list share the same times; the consent gate (step 6) still applies to a cloned voice. Needs: subtitle-skill steps 5-6 (done), and ffmpeg-skill audio-only tempo for tempo above 1.0. pyvideotrans was read for the idea only (fit the text to the slot before touching the audio); none of its code is used.
+
+### Findings (2026-11-06)
+
+- **subtitle-skill 0.4.3** (main `15b0050`): `subtitle-skill run <request.json>`. `translate` takes `subtitle`, `target_language`, `format`, `output_path`, `engine` (`argos` default, `opus-mt`, `ollama`, `deepl`, `memory`), `translation_memory`, `glossary`, `constraints`; cue ids and times are copied, never stretched (its ADR-004 decision 5); the translated document comes back in `subtitle`. It has no length or budget input: a shorter line is asked for by the caller (a re-asked engine, or `memory` with the agent's own shorter line). `mux` takes `video_input`, `output_path`, `tracks: [{subtitle, title?}]`, `default_language`, and passes `--min-duration 0` to ffmpeg-skill's caption so the timing passes through (its ADR-005).
+- **ffmpeg-skill 3.1.7** (main `0fc55db`, read only): still **no audio-only tempo change**. No tool declared `audio_only` takes a tempo flag; `fit` (`max_speed`) and `speedramp` need a video stream; `pad` is still `audio_only: false`. So the roadmap's "Needs: ffmpeg-skill audio-only tempo for tempo above 1.0" is not met, and DUB keeps rendering at tempo 1.0 (ADR-007, ADR-008).
+- **Matroska and the AAC priming.** `mux` into `.mkv` copies the dubbed MP4's AAC with its 1024 priming samples: the audio stream starts at 0 and the video stream (and the subtitle events with it) at 0.021 s. On the picture's clock the soft track has exactly the cue list's times.
+
+### Decision
+
+- **`rate.py`, pure.** Per line: `chars` (characters that are spoken: not white space, punctuation or control characters) and, for `ja`, `morae` (kana exact: a small ゃ / ァ joins the mora before it, っ ん ー count; kanji 2, digits 2, Latin letters 1 each, estimated, with `morae_exact: false`). No reading dictionary is added: the estimate is labelled, and `chars` is exact.
+- **The voice's rate is measured on the clips themselves.** seconds = overhead + units × seconds_per_unit by least squares over every measured line (`linear`, the overhead being the engine's own silence around a line) when two or more lengths differ and the fit is sane; else units / seconds over all lines (`proportional`). One model per unit kind.
+- **Budget.** For a line that does not fit: floor((room × tempo − overhead) / seconds_per_unit), with seconds_per_unit the slower of the voice's and the line's own, so a line this voice speaks slowly is not given the average; never negative, always shorter than the line. Given at `--max-tempo` (`budget`) and at tempo 1.0 (`budget_at_tempo_1`), because 1.0 is the only tempo DUB renders until ffmpeg-skill changes tempo on audio alone: a line that fits only when sped up (`status: tempo`) gets its `budget_at_tempo_1` too (`needs_tempo`). An empty or unmeasured clip gets no budget, with its reason. The text is never shortened here (ADR-003).
+- **`dubbing fit --rate`** (needs `--lang`) adds `rate` to the plan and `budget` to each `unfit` entry, also inside `TIMING_OVERFLOW`'s details. Without `--rate` the plan is unchanged.
+- **DUB always reports the budgets**, at tempo 1.0: `fit.rate`, `fit.unfit[].budget`, and the same in `TIMING_OVERFLOW`'s details. With `--on-unfit keep` one run gives the agent the dubbed video and every line it has to re-ask, so the chain needs no separate synthesis pass. Lines, times and the consent gate are untouched: a reference voice is still refused with `CONSENT_REQUIRED` before any engine work (ADR-009).
+- **The chain stays the caller's.** This skill does not call subtitle-skill: translation is its job (ADR-003), and so is the soft track. One cue list holds because subtitle-skill keeps the source times, DUB checks the translated cues against `--source-cues` (ADR-008, within 0.1 s) and places each line at its cue's start, and `mux` passes the times through.
+- **doctor** reports `operations.dub.tempo`: `rendered: 1.0`, and `above_1: {ready: false, ffmpeg_skill: {available, tools, used: false, problem}}`, where `available` means a tool declared `audio_only` with a `tempo` / `atempo` / `speed` flag. Today it is not available, and doctor warns. Finding one would not make DUB use it: that is a change here.
+
+### Done when, checked
+
+- On an en→ja fixture (`tests/fixtures/localise/en_ja.json`) every line either fits its cue or is reported with its budget: **met** (`LocaliseDubTests`, and the integration test). The re-asked line, within its budget, then fits.
+- The dubbed video, its ja soft track and the cue list share the same times: **met** (`LocaliseIntegrationTests`: real subtitle-skill `translate` and `mux`, the real ffmpeg-skill; the track is extracted from the `.mkv` and read back on the picture's clock).
+- The consent gate still applies to a cloned voice: **met** (refused before the engine without its record, accepted with it).
+- **Not met:** rendering any tempo above 1.0. ffmpeg-skill has no audio-only tempo, so budgets at `--max-tempo` are reported but only `budget_at_tempo_1` can be rendered today. The proposal stays with Velisa's ROADMAP; ffmpeg-skill is not changed from here.
+- **Agent side** (run the chain, re-ask once, report what still does not fit) is video-production-agent's. This PR gives it the inputs: `fit.unfit[].budget` (`chars`, `morae`, `shorten_by`, `tempo`) in DUB's result and in `TIMING_OVERFLOW`, and `rate` from `fit --rate`.
+
+### Contract changes for video-production-agent
+
+Additive only: `dubbing/fit` argv gains `[--rate]` and a `rate` entry; DUB's `fit` gains `rate` and `unfit[].budget`, and its contract entry `budgets`; doctor's `operations.dub.tempo`. No field is removed or renamed; `contract_version` stays 1.0.
+
+### Tests
+
+`tests/test_localise.py`: units and morae, the voice model (linear, proportional), budgets that fit their room and are the most that do, the rate report (fits / budget / tempo-only / empty clip), `fit --rate` on WaveSkill and its CLI refusal, the en→ja chain on a WAV programme with the fake Chatterbox, the consent gate, doctor's tempo report, and the integration test with subtitle-skill. CI checks subtitle-skill main out in the integration, engines and voicevox jobs (`DUBBING_SUBTITLE_SKILL_DIR`), so the chain never skips there.

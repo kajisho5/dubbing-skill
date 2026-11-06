@@ -18,6 +18,7 @@ from .dub import ALIGN_TOLERANCE, DUB_SCHEMA, DUB_TEMPO, TEMPO_GAP
 from .mixing import DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, MAX_DUCK_DB, MAX_VOICE_GAIN_DB
 from .ops import NARRATE_SCHEMA
 from .provenance import ENGINE_FIELDS
+from .rate import DIGIT_MORAE, KANJI_MORAE, LATIN_MORAE, MORA_LANGS, RENDER_TEMPO
 from .timing import (DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, FIT_SCHEMA, MAX_OVERRUN_LIMIT, RENDER_GAP, TEMPO_LIMIT,
                      UNFIT_POLICIES)
 
@@ -91,7 +92,11 @@ _OP_TOOLS = {
                      "[--seed 0]", "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
             "refused": {"a reference voice without a consent record that checks out": "CONSENT_REQUIRED (ADR-009); no flag skips it",
                         "plain text": "INVALID_ARGUMENT: each line replaces the dialogue of its segment, so cues are needed",
-                        "a line longer than its room": "TIMING_OVERFLOW unless --on-unfit keep (the original dialogue stays there)"},
+                        "a line longer than its room": "TIMING_OVERFLOW unless --on-unfit keep (the original dialogue stays there); "
+                                                       "either way each such line carries its length budget at tempo 1.0"},
+            "budgets": "fit.rate and fit.unfit[].budget (ADR-014): for each line that does not fit, the most characters "
+                       "(and morae for ja) that fit its room at tempo 1.0, measured on the voice's own rate; also in the "
+                       "TIMING_OVERFLOW details",
             "schema": DUB_SCHEMA,
             "limits": {"lines": MAX_LINES, "chars_per_line": MAX_LINE_CHARS, "tempo": DUB_TEMPO,
                        "max_overrun": {"default": DEFAULT_MAX_OVERRUN, "range": [0.0, MAX_OVERRUN_LIMIT], "unit": "s",
@@ -144,17 +149,29 @@ def tools() -> list:
          "description": "Timing fit (ADR-007): one clip per cue measured through ffmpeg-skill/probe against its cue window; "
                         "per line fit (tempo 1.0, silence after), tempo (the smallest speed-up within --max-tempo) or unfit "
                         "(reported with the reason, the tempo it would need and the seconds over; never cut, never placed); "
-                        "the silence before each placed line and after the last. Writes no media",
+                        "the silence before each placed line and after the last. Writes no media. With --rate (step 11, "
+                        "ADR-014): each line's length in --lang, the voice's speaking rate measured on the clips, and for "
+                        "each line that does not fit its length budget (characters, and morae for ja) at --max-tempo and "
+                        "at tempo 1.0, so the caller can ask the translator for a shorter line",
          "inputs": ["cues (CUES_INPUT: .json, .srt, .vtt)", "one audio clip per cue, in cue order"],
          "argv": ["fit", "<cues.json|cues.srt|cues.vtt>", "<clip>...", f"[--max-tempo {DEFAULT_MAX_TEMPO:g}]",
-                  f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|report]", "[--lang <ja>]", "[--timeout 120]",
-                  "[--ffmpeg-skill <dir>]", "--json"],
+                  f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|report]", "[--lang <ja>]", "[--rate]",
+                  "[--timeout 120]", "[--ffmpeg-skill <dir>]", "--json"],
          "limits": {"max_tempo": {"default": DEFAULT_MAX_TEMPO, "range": [1.0, TEMPO_LIMIT]},
                     "max_overrun": {"default": DEFAULT_MAX_OVERRUN, "range": [0.0, MAX_OVERRUN_LIMIT], "unit": "s",
                                     "bounded_by": "the next cue's start"},
                     "slow_down": False, "tempo_step": 0.001, "on_unfit": list(UNFIT_POLICIES)},
          "statuses": {"fit": "spoken at tempo 1.0", "tempo": "sped up within --max-tempo",
                       "unfit": "over_limit | empty_slot | empty_clip | not_measured: reported, TIMING_OVERFLOW unless --on-unfit report"},
+         "rate": {"flag": "--rate", "needs": "--lang", "roadmap_step": 11, "adr": "docs/decisions.md ADR-014",
+                  "units": {"chars": "spoken characters (no white space, punctuation or control characters)",
+                            "morae": f"for {list(MORA_LANGS)}: kana exact; kanji {KANJI_MORAE}, digits {DIGIT_MORAE}, "
+                                     f"Latin letters {LATIN_MORAE} each, estimated (morae_exact: false)"},
+                  "voice": "seconds = overhead + units x seconds_per_unit over the measured clips (linear), else "
+                           "units / seconds (proportional)",
+                  "budget": "floor((room x tempo - overhead) / max(voice, line) seconds_per_unit), always shorter than "
+                            "the line; at --max-tempo (budget) and at tempo 1.0 (budget_at_tempo_1)",
+                  "render_tempo": RENDER_TEMPO, "result": "rate, and unfit[].budget"},
          "render": RENDER_GAP, "schema": FIT_SCHEMA},
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engines, ffmpeg-skill) and how to get it; never downloads",

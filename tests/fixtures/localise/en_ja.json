@@ -1,0 +1,22 @@
+{
+  "description": "en->ja localisation fixture (roadmap step 11, ADR-014). `source` is a subtitle-skill document; `translation_memory` is what subtitle-skill `translate` (engine memory) is given first, `reask_memory` the shorter line asked for once with the budget. The programme is 8 s. With the fake Chatterbox (0.3 s + 0.06 s per character) line b (28 characters, 1.98 s) does not fit its 1 s cue; its re-asked translation (10 characters, 0.9 s) does.",
+  "programme_seconds": 8.0,
+  "source": {
+    "id": "talk",
+    "language": "en",
+    "cues": [
+      {"id": "a", "start": 0.5, "end": 2.5, "text": "Hello, everyone."},
+      {"id": "b", "start": 3.0, "end": 4.0, "text": "Today we talk about how dubbing and subtitles are made."},
+      {"id": "c", "start": 5.0, "end": 7.0, "text": "Thank you."}
+    ]
+  },
+  "translation_memory": [
+    {"source": "Hello, everyone.", "target": "皆さん、こんにちは。"},
+    {"source": "Today we talk about how dubbing and subtitles are made.", "target": "今日は吹き替えと字幕の作り方について詳しくお話しします。"},
+    {"source": "Thank you.", "target": "ありがとうございました。"}
+  ],
+  "reask_memory": [
+    {"source": "Today we talk about how dubbing and subtitles are made.", "target": "今日は吹き替えの話。"}
+  ],
+  "unfit_at_first": ["b"]
+}

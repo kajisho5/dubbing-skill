@@ -20,7 +20,9 @@ DUB, step by step:
   7. fit        each clip through ffmpeg-skill/probe, then the timing fit (timing.py, ADR-007) against its cue, with
                 room up to --max-overrun past the cue end but never past the next cue or the programme's end. Tempo is
                 1.0: ffmpeg-skill has no audio-only tempo change (ADR-007), so a line that is longer than its room is
-                unfit. Unfit lines fail the op (TIMING_OVERFLOW) or, with --on-unfit keep, keep the original dialogue
+                unfit. Every unfit line carries its length budget at tempo 1.0 (rate.py, ADR-014: characters, and morae
+                for ja), for the caller to ask the translator for a shorter line. Unfit lines fail the op
+                (TIMING_OVERFLOW) or, with --on-unfit keep, keep the original dialogue
   8. render     the fitted lines over the programme audio, ducked, then into the video (mixing.py), all through
                 ffmpeg-skill
   9. validate   the output through ffmpeg-skill/probe: as long as the programme, and the audio as long as the picture,
@@ -47,7 +49,7 @@ from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits
                   unique_credits, validate_clip, voice_request_fields)
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
-from .timing import DEFAULT_MAX_OVERRUN, Slot, check_limits, fit_lines, slots_for
+from .timing import DEFAULT_MAX_OVERRUN, Slot, attach_rate, check_limits, fit_lines, slots_for
 
 DUB_SCHEMA = f"{SKILL_ID}/dub@1"
 UNFIT_POLICIES = ("fail", "keep")
@@ -235,11 +237,13 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
             clip_facts.append(validate_clip(skill, r.output_path, k, engine.id))
         measured = [float(f.get("duration") or 0.0) for f in clip_facts]
         plan = fit_lines(capped_slots(script, float(req.max_overrun), programme_end), measured, DUB_TEMPO, float(req.max_overrun))
+        attach_rate(plan, script, req.lang, DUB_TEMPO)          # each unfit line's length budget at tempo 1.0 (ADR-014)
         if plan["unfit"] and req.on_unfit == "fail":
             raise DubbingError("TIMING_OVERFLOW", f"{len(plan['unfit'])} translated line(s) are longer than their segment allows "
                                f"(tempo 1.0, max overrun {float(req.max_overrun):g}s, never past the next cue or the programme's "
-                               "end): shorten them, give them --max-overrun, or pass --on-unfit keep to keep the original "
-                               "dialogue there", {"unfit": plan["unfit"], "plan": plan})
+                               "end): shorten them to their budget (unfit[].budget: characters, and morae for ja), give them "
+                               "--max-overrun, or pass --on-unfit keep to keep the original dialogue there",
+                               {"unfit": plan["unfit"], "plan": plan})
         placed = [{"index": d["index"], "start": d["start"], "duration": measured[d["index"]]} for d in plan["lines"]
                   if d["status"] != "unfit"]
         steps: List[Dict[str, Any]] = [{"tool": "ffmpeg-skill/probe", "for": "programme and clips", "count": len(clip_facts) + 1}]
@@ -301,7 +305,7 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     warnings = []
     if plan["unfit"]:
         warnings.append(f"{len(plan['unfit'])} line(s) did not fit their segment and keep the original dialogue (--on-unfit keep): "
-                        f"{[u['index'] for u in plan['unfit']]}")
+                        f"{[u['index'] for u in plan['unfit']]}; their length budgets are in fit.unfit[].budget")
     if plan["summary"]["overruns"]:
         warnings.append(f"line(s) {plan['summary']['overruns']} run past their cue end (within --max-overrun)")
     if source_channels > channels:

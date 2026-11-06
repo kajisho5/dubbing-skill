@@ -29,6 +29,24 @@ def _dir_from_env(key: str, sibling: str, marker: str) -> Optional[Path]:
 
 OS_DIR = _dir_from_env("AI_VIDEO_PRODUCTION_OS_DIR", "AI-video-production-OS", "registry/conformance.py")
 FFMPEG_SKILL_DIR = _dir_from_env("DUBBING_FFMPEG_SKILL_DIR", "ffmpeg-skill", "scripts/_contract.py")
+# subtitle-skill with translate and mux (its steps 5-6): the localise chain's other half (roadmap step 11, ADR-014)
+SUBTITLE_SKILL_DIR = _dir_from_env("DUBBING_SUBTITLE_SKILL_DIR", "subtitle-skill", "src/subtitle_skill/translation.py")
+
+
+def run_subtitle_skill(request: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """One `subtitle-skill run <request.json>` of the checkout at SUBTITLE_SKILL_DIR, as an agent calls it, with
+    ffmpeg-skill at FFMPEG_SKILL_DIR. Returns its JSON response; a non-ok response fails the calling test."""
+    import subprocess
+    assert SUBTITLE_SKILL_DIR is not None and FFMPEG_SKILL_DIR is not None
+    path = os.path.join(workdir, f"subtitle-request-{request['operation']}.json")
+    Path(path).write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+    run_env = dict(os.environ, PYTHONPATH=str(SUBTITLE_SKILL_DIR / "src"), SUBTITLE_SKILL_FFMPEG_SKILL_DIR=str(FFMPEG_SKILL_DIR),
+                   PYTHONIOENCODING="utf-8")
+    proc = subprocess.run([sys.executable, "-m", "subtitle_skill", "run", path], capture_output=True, env=run_env, timeout=300)
+    os.remove(path)
+    doc = json.loads(proc.stdout.decode("utf-8"))
+    assert doc.get("status") == "ok", (doc, proc.stderr.decode("utf-8", "replace")[-2000:])
+    return doc
 
 
 def run_cli(*argv: str) -> Tuple[int, Dict[str, Any]]:

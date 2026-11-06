@@ -21,7 +21,9 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   dubbing fit <cues> <clip>... --json
                               timing fit (ADR-007): one clip per cue measured through ffmpeg-skill/probe against its cue
                               window; the tempo each needs (at most --max-tempo), the silence around it, and every line
-                              that cannot fit (TIMING_OVERFLOW, or listed with --on-unfit report). Writes no media
+                              that cannot fit (TIMING_OVERFLOW, or listed with --on-unfit report). Writes no media.
+                              --rate (ADR-014): each line's length (characters, morae for ja), the voice's speaking rate,
+                              and for each line that does not fit its length budget, at --max-tempo and at tempo 1.0
 
 Translation is not an op: the caller passes text that is already translated (ADR-003)."""
 from __future__ import annotations
@@ -153,7 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="seconds a line may run past its cue end, never past the next cue's start (default 0)")
     f.add_argument("--on-unfit", choices=UNFIT_POLICIES, default="fail",
                    help="a line that cannot fit within the limits: fail (default, TIMING_OVERFLOW) or report it in the plan")
-    f.add_argument("--lang", help="the cues' language (only used to join SRT / VTT lines; ja and zh join without a space)")
+    f.add_argument("--lang", help="the cues' language (joins SRT / VTT lines: ja and zh without a space; with --rate, the "
+                   "language budgets are counted in)")
+    f.add_argument("--rate", action="store_true",
+                   help="also measure the voice's speaking rate and give each line that does not fit a length budget in "
+                        "--lang (characters, and morae for ja), at --max-tempo and at tempo 1.0 (ADR-014)")
     f.add_argument("--timeout", type=float, default=120.0, help="time limit per ffmpeg-skill call in seconds (default 120)")
     f.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     f.add_argument("--json", action="store_true")
@@ -245,6 +251,12 @@ def _human(doc: Dict[str, Any]) -> None:
                 print(f"  line {d['index']}: cannot fit ({d['reason']}), {d['measured']}s in {d['room']}s, needs tempo {d['needed_tempo']}")
             else:
                 print(f"  line {d['index']}: {d['status']} at x{d['tempo']}, {d['fitted']}s from {d['start']}s, slack {d['slack']}s")
+        for d in (doc.get("rate") or {}).get("lines", []):
+            for key in ("budget", "budget_at_tempo_1"):
+                b = d.get(key)
+                if b:
+                    sizes = ", ".join(f"{b[k]} {k} (now {d[k]})" for k in doc["rate"]["units"] if b.get(k) is not None)
+                    print(f"  line {d['index']}: budget at x{b['tempo']:g}: {sizes}")
         for w in doc["warnings"]:
             print(f"  warning: {w}")
     elif "engines" in doc and "skill_id" not in doc:
@@ -315,7 +327,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.cmd == "fit":
             _emit(fit(FitRequest(cues_path=args.cues, clip_paths=list(args.clips), lang=args.lang, max_tempo=args.max_tempo,
                                  max_overrun=args.max_overrun, on_unfit=args.on_unfit, timeout=args.timeout,
-                                 ffmpeg_skill_dir=args.ffmpeg_skill)), as_json)
+                                 ffmpeg_skill_dir=args.ffmpeg_skill, rate=args.rate)), as_json)
             return 0
     except DubbingError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)
