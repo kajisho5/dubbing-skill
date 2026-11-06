@@ -29,6 +29,7 @@ from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, 
                      watermark_summary)
 from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, not_an_output, select_engine, unique_consents,
                   unique_credits, validate_clip, voice_request_fields)
+from .pronunciation import prepare as prepare_pronunciation
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
 from .timing import Slot, fit_lines
@@ -69,6 +70,7 @@ class DescribeRequest:
     overwrite: bool = False
     ffmpeg_skill_dir: Optional[str] = None
     offline: bool = False
+    pronunciation_path: Optional[str] = None  # a dubbing/pronunciation@1 dictionary (ADR-015)
 
 
 def _number_in(value: Any, lo: float, hi: float, flag: str) -> None:
@@ -176,7 +178,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
     ducked sound, written to `req.output_path`."""
     reference, voice_params = voice_request_fields(req.reference_path, req.consent_path)
     _check_numbers(req)
-    side = [req.descriptions_path] + ([req.gaps_path] if req.gaps_path else [])
+    side = [req.descriptions_path] + ([req.gaps_path] if req.gaps_path else []) + \
+        ([req.pronunciation_path] if req.pronunciation_path else [])
     src, dst, kind = check_media_paths(req.input_path, side, req.output_path, req.overwrite)
     not_an_output(dst, req.reference_path, req.consent_path)
     script = parse_script(os.path.abspath(req.descriptions_path), req.lang)
@@ -190,8 +193,10 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
     params: Dict[str, Any] = dict(voice_params, seed=req.seed)
     if req.accept_unverified_terms:
         params["accept_unverified_terms"] = True
-    probe_reqs = [EngineRequest(op="audio_description", text=line.text, lang=req.lang, output_path="", voice=req.voice,
-                                reference_audio=reference, params=params) for line in script.lines]
+    pron = prepare_pronunciation(req.pronunciation_path, engine, req.lang, [line.text for line in script.lines])
+    probe_reqs = [EngineRequest(op="audio_description", text=pron.texts[k], lang=req.lang, output_path="", voice=req.voice,
+                                reference_audio=reference, params=dict(params, **pron.params[k]))
+                  for k, line in enumerate(script.lines)]
     for r in probe_reqs:
         engine.check_request(r)
     timeout = float(req.timeout)
@@ -270,6 +275,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
                           "sample_rate": a.get("sample_rate"), "duration": facts.get("duration"), "line": line.index,
                           "cue": [line.start, line.end], "gap": gaps[gap_index] if gap_index is not None else None,
                           "window": [slot.start, slot.end], "fit": d["status"]}
+            if pron.dictionary is not None:
+                parameters["pronunciation"] = pron.provenance(line.index)
             clips.append({"index": line.index, "duration": facts.get("duration"), "sample_rate": a.get("sample_rate"),
                           "status": d["status"], "placed": d["status"] != "unfit", "start": d["start"], "end": d["end"],
                           "gap": gaps[gap_index] if gap_index is not None else None, "window": [slot.start, slot.end],
@@ -289,6 +296,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
                       "duck_db": float(req.duck), "voice_gain_db": float(req.voice_gain), "audio_stream": req.audio_stream,
                       "sample_rate": rate, "channels": channels, "output_kind": kind,
                       "clips_sha256": [c["provenance"]["output"]["sha256"] for c in placed_clips]}
+        if pron.dictionary is not None:
+            parameters["pronunciation"] = pron.provenance()
         provenance = build_provenance(op="audio_description", engine=engine_doc, text=full_text, output_path=final,
                                       parameters=parameters, voice=first.extra.get("voice") or req.voice,
                                       translation=req.translation_note, ffmpeg_skill=info.to_dict(), watermark=watermark,
@@ -296,7 +305,8 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         _place(final, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
-    warnings = []
+    pronunciation = pron.report(results)
+    warnings = pron.warnings(pronunciation)
     if plan["unfit"]:
         warnings.append(f"{len(plan['unfit'])} description(s) did not fit their window and were left out (--on-unfit skip): "
                         f"{[u['index'] for u in plan['unfit']]}")
@@ -328,6 +338,7 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         "mix": {"duck_db": float(req.duck), "voice_gain_db": float(req.voice_gain), "pieces": pieces, "sample_rate": rate,
                 "channels": channels},
         "clips": clips,
+        "pronunciation": pronunciation,
         "skipped": [u["index"] for u in plan["unfit"]],
         "obligations": {"credit": [c["credit"] for c in credits], "credit_required": engine.spec.credit_required,
                         "credits": credits, "watermark": watermark},

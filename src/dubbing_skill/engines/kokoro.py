@@ -58,6 +58,7 @@ SPEC = EngineSpec(
            "(koniwa tnc, テレビ西日本); credit that source when one of them is used (Kokoro-82M VOICES.md); recorded per clip",
     credit_required=False,
     watermark=None,
+    pronunciation="phoneme_hint",
     languages=tuple(LANG_CODES),
     japanese="weak",
     voice_cloning=False,

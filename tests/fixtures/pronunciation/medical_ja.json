@@ -1,0 +1,10 @@
+{
+  "schema": "dubbing/pronunciation@1",
+  "name": "medical-ja-fixture",
+  "entries": [
+    {"term": "口腔", "lang": "ja", "reading": "コウクウ", "note": "medical reading (general: こうこう)"},
+    {"term": "腹腔", "lang": "ja", "reading": "フククウ", "note": "medical reading (general: ふっこう)"},
+    {"term": "貼付", "lang": "ja", "reading": "チョウフ", "accent": 0, "note": "medical reading (general: てんぷ)"},
+    {"term": "acetaminophen", "lang": "en", "reading": "a-seet-a-MIN-oh-fen", "ipa": "əˌsiːtəˈmɪnəfən"}
+  ]
+}

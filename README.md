@@ -41,6 +41,7 @@ dubbing dub talk.mp4 en.srt --lang en -o talk.en.mp4 --source-cues ja.srt --json
 dubbing describe talk.mp4 desc.json --lang ja -o talk.ad.mp4 --detect-gaps --json   # audio description inside the quiet stretches
 dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and silence each line needs; lines that cannot fit
 dubbing fit ja.srt line0.wav line1.wav --lang ja --rate --json   # plus the voice's rate and a length budget per unfit line
+dubbing terms script.txt --pronunciation terms.json --lang ja --json   # the dictionary terms each line contains
 ```
 
 ## NARRATE
@@ -95,6 +96,22 @@ dubbing fit ja.srt line0.wav line1.wav --lang ja --rate --json   # plus the voic
 - **Policy.** An unfit line fails the call with `TIMING_OVERFLOW` (exit 4), with the plan in `error.details.plan`. `--on-unfit report` returns the plan with `summary.all_fit: false` instead.
 - **Speech rate and budgets** (`--rate --lang ja`, roadmap step 11, [ADR-014](docs/decisions.md)). Each line's length in the cues' language (spoken characters; morae for Japanese, kana exact, kanji, digits and Latin letters estimated), the voice's speaking rate measured on the clips themselves (the engine's overhead per line, then seconds per character or mora), and, for each line that does not fit, a length budget: the most characters (and morae) that would fit, at `--max-tempo` (`budget`) and at tempo 1.0 (`budget_at_tempo_1`). The caller asks the translator (subtitle-skill `translate`) for a line within it instead of speeding the voice up. DUB reports the same budget, at tempo 1.0, for every line it cannot place (`fit.unfit[].budget`, also in `TIMING_OVERFLOW`'s details).
 - **Rendering** needs an audio-only tempo change and an audio-only pad in ffmpeg-skill, which it does not have up to 3.1.7. The plan says so under `render`. DUB applies the plan at tempo 1.0 and needs no pad (ADR-008). NARRATE and DUB apply tempo once ffmpeg-skill can.
+
+## Pronunciation dictionary ([ADR-015](docs/decisions.md))
+
+Medical terms, drug names and people's names that an engine misreads are written once in a per-project dictionary,
+a `dubbing/pronunciation@1` JSON file, and given to `narrate`, `dub` or `describe` with `--pronunciation terms.json`:
+
+```json
+{"schema": "dubbing/pronunciation@1", "name": "clinic-2026",
+ "entries": [{"term": "acetaminophen", "lang": "en", "reading": "a-seet-a-MIN-oh-fen", "ipa": "əˌsiːtəˈmɪnəfən"},
+             {"term": "口腔", "lang": "ja", "reading": "コウクウ", "accent": 0}]}
+```
+
+- Every entry names its language (an entry for `en` serves `en-US` and `en-GB`). Nothing is built in and no language is assumed; only the entries for the op's `--lang` are used.
+- `reading` is written in the language's own script, as the engine should say it (a respelling in English, katakana in Japanese). `accent` (the accent nucleus in morae, 0 = flat) is used only where the engine takes one, and `ipa` only where it takes phonemes.
+- Each engine takes it its own way: **VOICEVOX** through its user dictionary (each word added for the run and removed after it; the engine's own reading of each line is recorded and every term is checked against it), **Kokoro** as inline phonemes for English entries with `ipa`, and **Chatterbox** and **Style-Bert-VITS2** by reading the term's respelling. The cue text itself is never changed.
+- `dubbing terms script.txt --pronunciation terms.json --lang ja --json` lists the dictionary terms each line contains, the terms the script never uses, and the dictionary as transcription-skill's `--vocabulary`. Every op result carries the same per line in `pronunciation`.
 
 ## Engines (optional, [ADR-001](docs/decisions.md))
 

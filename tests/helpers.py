@@ -457,6 +457,14 @@ def _write16(path: str, samples: List[int], rate: int) -> None:
 #   notwav      /synthesis answers 200 with JSON
 #   stereo      /synthesis answers a 2-channel WAV
 #   fail_query  /audio_query answers 500
+#   fail_delete DELETE /user_dict_word answers 500 (the word stays)
+# The user dictionary (roadmap step 12, ADR-015; voicevox_engine 0.26.0 app/routers/user_dict.py):
+#   POST   /user_dict_word?surface=&pronunciation=&accent_type=&word_type=&priority=   -> the word's UUID (JSON string)
+#   DELETE /user_dict_word/<uuid>                                                     -> 204
+#   GET    /user_dict                                                                 -> {uuid: word}
+#   POST   /accent_phrases?text=<katakana>&speaker=                                   -> [AccentPhrase], accent 1
+# /audio_query reads every word in the dictionary as its pronunciation (the text with each surface replaced), and its
+# `kana` is that reading.
 VV_VERSION = "0.26.0"
 VV_RATE = 24000
 VV_MORA = 0.06
@@ -485,11 +493,18 @@ class FakeVoicevox:
         self.version, self.mode = version, mode
         self.calls: List[Dict[str, Any]] = []
         self.url = ""
+        self.user_dict: Dict[str, Dict[str, Any]] = {}
 
     def talk_ids(self) -> List[int]:
         return [st["id"] for sp in self.speakers for st in sp["styles"] if st.get("type", "talk") in ("talk", "streaming_talk")]
 
+    def read(self, text: str) -> str:
+        for w in sorted(self.user_dict.values(), key=lambda w: -len(w["surface"])):
+            text = text.replace(w["surface"], w["pronunciation"])
+        return text
+
     def audio_query(self, text: str, style_id: int) -> Dict[str, Any]:
+        text = self.read(text)
         moras = [{"text": ch, "consonant": None, "consonant_length": None, "vowel": "a", "vowel_length": VV_MORA, "pitch": 5.5}
                  for ch in text]
         return {"accent_phrases": [{"moras": moras, "accent": 1, "pause_mora": None, "is_interrogative": False}],
@@ -572,7 +587,33 @@ def fake_voicevox(**kw: Any) -> Iterator[FakeVoicevox]:
             body = self.rfile.read(length) if length else b""
             fake.calls.append({"method": method, "path": parts.path, "query": {k: v[0] if len(v) == 1 else v for k, v in query.items()},
                                "content_type": self.headers.get("Content-Type"), "body": body})
-            routes = {("GET", "/version"), ("GET", "/speakers"), ("POST", "/audio_query"), ("POST", "/synthesis")}
+            routes = {("GET", "/version"), ("GET", "/speakers"), ("POST", "/audio_query"), ("POST", "/synthesis"),
+                      ("POST", "/user_dict_word"), ("GET", "/user_dict"), ("POST", "/accent_phrases")}
+            if method == "DELETE" and parts.path.startswith("/user_dict_word/"):
+                uuid = parts.path.rsplit("/", 1)[1]
+                if fake.mode == "fail_delete":
+                    return self.reply(500, {"detail": "Internal Server Error"})
+                if uuid not in fake.user_dict:
+                    return self.reply(422, {"detail": "the word does not exist"})
+                del fake.user_dict[uuid]
+                self.send_response(204)
+                self.end_headers()
+                return None
+            if (method, parts.path) == ("GET", "/user_dict"):
+                return self.reply(200, fake.user_dict)
+            if (method, parts.path) == ("POST", "/user_dict_word"):
+                q = {k: v[0] for k, v in query.items() if len(v) == 1}
+                need = {"surface", "pronunciation", "accent_type"}
+                if not need <= set(q) or set(q) - need - {"word_type", "priority"} or not q["accent_type"].isdigit() \
+                        or not all("\u30a1" <= c <= "\u30f4" or c == "\u30fc" for c in q["pronunciation"]) \
+                        or int(q["accent_type"]) > len(q["pronunciation"]) \
+                        or q.get("word_type", "PROPER_NOUN") not in ("PROPER_NOUN", "COMMON_NOUN", "VERB", "ADJECTIVE", "SUFFIX") \
+                        or not 0 <= int(q.get("priority", "5")) <= 10:
+                    return self.reply(422, {"detail": "invalid user dictionary word"})
+                import uuid as _uuid
+                word_id = str(_uuid.uuid4())
+                fake.user_dict[word_id] = dict(q, accent_type=int(q["accent_type"]))
+                return self.reply(200, word_id)
             if (method, parts.path) not in routes:
                 known = {p for _, p in routes}
                 return self.reply(405 if parts.path in known else 404, {"detail": "Method Not Allowed" if parts.path in known else "Not Found"})
@@ -584,6 +625,11 @@ def fake_voicevox(**kw: Any) -> Iterator[FakeVoicevox]:
             if len(speaker) != 1 or not speaker[0].isdigit():
                 return self.reply(422, {"detail": [{"loc": ["query", "speaker"], "msg": "field required (an integer)"}]})
             style_id = int(speaker[0])
+            if parts.path == "/accent_phrases":
+                text = query.get("text", [""])[0]
+                moras = [{"text": ch, "consonant": None, "consonant_length": None, "vowel": "a", "vowel_length": VV_MORA,
+                          "pitch": 5.5} for ch in text]
+                return self.reply(200, [{"moras": moras, "accent": 1, "pause_mora": None, "is_interrogative": False}])
             if parts.path == "/audio_query":
                 if fake.mode == "fail_query":
                     return self.reply(500, {"detail": "Internal Server Error"})
@@ -616,6 +662,9 @@ def fake_voicevox(**kw: Any) -> Iterator[FakeVoicevox]:
 
         def do_POST(self) -> None:  # noqa: N802 - http.server API
             self.handle_any("POST")
+
+        def do_DELETE(self) -> None:  # noqa: N802 - http.server API
+            self.handle_any("DELETE")
 
         def log_message(self, *args: Any) -> None:
             pass

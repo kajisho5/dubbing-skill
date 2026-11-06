@@ -20,10 +20,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import unicodedata
 import wave
 from typing import Any, Dict, List, Optional
 
 from ..errors import DubbingError
+from ..pronunciation import PRON_PARAM
+from ..rate import count_morae
 from .base import INCOMPATIBLE, OK, Engine, EngineRequest, EngineResult, EngineSpec, in_range, missing, parse_version
 from .lookup import check_loopback_url, loopback_get_json, loopback_request
 
@@ -52,6 +56,13 @@ RECORDED_QUERY_FIELDS = QUERY_FIELDS[1:7] + ("pauseLength", "pauseLengthScale")
 LOOKUP_TIMEOUT = 10.0
 SYNTHESIS_TIMEOUT = 600.0                      # one line; the worker's own --timeout still bounds the whole batch
 MAX_JSON_BYTES = 8 << 20
+# The pronunciation dictionary (roadmap step 12, ADR-015) through the app's user dictionary, as read from
+# voicevox_engine 0.26.0 app/routers/user_dict.py: POST /user_dict_word?surface=&pronunciation=&accent_type=&word_type=
+# &priority= -> the word's UUID (JSON string); DELETE /user_dict_word/{uuid} -> 204. A reading is katakana; accent_type
+# is the accent nucleus (0 = flat) and at most the reading's morae. Words are added for the run and removed after it.
+KATAKANA_READING = re.compile(r"^[\u30A1-\u30F4\u30FC]+$")
+DICT_WORD_TYPE = "PROPER_NOUN"
+DICT_PRIORITY = 10                             # the highest: the run's reading wins over the app's own and the user's words
 MAX_WAV_BYTES = 64 << 20
 
 SPEC = EngineSpec(
@@ -65,6 +76,7 @@ SPEC = EngineSpec(
     credit="VOICEVOX:<character> (for example VOICEVOX:ずんだもん), placed where viewers can find it (description or credits)",
     credit_required=True,
     watermark=None,
+    pronunciation="user_dictionary",
     languages=("ja",),
     japanese="native",
     voice_cloning=False,
@@ -186,10 +198,35 @@ class VoicevoxEngine(Engine):
         raise DubbingError("INVALID_ARGUMENT", f"VOICEVOX at {base_url()} has no style {style_id}",
                            {"engine": self.id, "voice": style_id, "talk_styles": talk[:200]})
 
+    @staticmethod
+    def dictionary_words(req: EngineRequest) -> List[Dict[str, Any]]:
+        """The pronunciation entries of one line, checked for the user dictionary: a katakana reading, and an accent
+        nucleus no later than the reading's last mora."""
+        words = req.params.get(PRON_PARAM) if isinstance(req.params, dict) else None
+        if words is None:
+            return []
+        if not isinstance(words, list):
+            raise DubbingError("INVALID_ARGUMENT", "pronunciation entries must be a list", {"engine": "voicevox"})
+        out = []
+        for w in words:
+            term = w.get("term") if isinstance(w, dict) else None
+            reading = unicodedata.normalize("NFKC", w.get("reading") or "") if isinstance(w, dict) else ""
+            if not isinstance(term, str) or not term.strip() or not KATAKANA_READING.match(reading):
+                raise DubbingError("INVALID_ARGUMENT", f"VOICEVOX reads a dictionary entry from a katakana reading: {w!r} (write "
+                                   "the reading in katakana, for example 口腔 -> コウクウ)", {"engine": "voicevox", "entry": w})
+            morae = count_morae(reading)[0]
+            accent = w.get("accent")
+            if accent is not None and (isinstance(accent, bool) or not isinstance(accent, int) or not 0 <= accent <= morae):
+                raise DubbingError("INVALID_ARGUMENT", f"the accent of {term!r} must be 0 (flat) to {morae}, the morae of "
+                                   f"{reading}", {"engine": "voicevox", "entry": w, "morae": morae})
+            out.append({"term": term, "reading": reading, "accent": accent, "morae": morae})
+        return out
+
     def check_request(self, req: EngineRequest) -> None:
         super().check_request(req)
         if not req.text.strip():
             raise DubbingError("INVALID_ARGUMENT", "empty text", {"engine": self.id})
+        self.dictionary_words(req)
         voice = self.resolve(parse_style_id(req.voice))
         if not voice["terms_verified"] and not req.params.get(ACK_PARAM):
             raise DubbingError("TERMS_UNVERIFIED", f"the terms of the VOICEVOX character {voice['character']!r} (style "
@@ -201,26 +238,87 @@ class VoicevoxEngine(Engine):
                                 "verified": sorted(v["character"] for v in VERIFIED_CHARACTERS.values()),
                                 "acknowledge_with": "--accept-unverified-voice-terms", "adr": TERMS_ADR})
 
-    def _post(self, path: str, query: Dict[str, Any], body: Optional[bytes], accept: str, max_bytes: int) -> bytes:
+    def _post(self, path: str, query: Dict[str, Any], body: Optional[bytes], accept: str, max_bytes: int,
+              method: str = "POST") -> bytes:
         url = base_url()
         try:
-            status, _, data, err = loopback_request(url, "POST", path, query=query, body=body,
+            status, _, data, err = loopback_request(url, method, path, query=query, body=body,
                                                     content_type="application/json" if body is not None else None,
                                                     accept=accept, timeout=SYNTHESIS_TIMEOUT, max_bytes=max_bytes)
         except ValueError as e:
             raise DubbingError("ENGINE_UNAVAILABLE", f"{ENV_URL}: {e}", {"engine": self.id})
-        if err is not None or status != 200:
-            raise DubbingError("ENGINE_FAILED", f"VOICEVOX POST {path} failed: {err or 'HTTP %s %s' % (status, _detail(data))}",
+        if err is not None or status not in ((200, 204) if method == "DELETE" else (200,)):
+            raise DubbingError("ENGINE_FAILED", f"VOICEVOX {method} {path} failed: {err or 'HTTP %s %s' % (status, _detail(data))}",
                                {"engine": self.id, "endpoint": path, "status": status})
         return data
 
     def process(self, req: EngineRequest) -> EngineResult:
         return self.process_batch([req])[0]
 
+    def _estimate_accent(self, reading: str, style_id: int) -> int:
+        """The app's own accent for a reading given without one (POST /accent_phrases on the katakana)."""
+        raw = self._post("/accent_phrases", {"text": reading, "speaker": style_id}, None, "application/json", MAX_JSON_BYTES)
+        try:
+            phrases = json.loads(raw.decode("utf-8"))
+            accent = phrases[0]["accent"]
+        except (UnicodeDecodeError, ValueError, LookupError, TypeError):
+            raise DubbingError("INVALID_RESULT", "VOICEVOX /accent_phrases did not return accent phrases", {"engine": self.id})
+        if isinstance(accent, bool) or not isinstance(accent, int) or not 0 <= accent <= count_morae(reading)[0]:
+            raise DubbingError("INVALID_RESULT", f"VOICEVOX gave accent {accent!r} for {reading}", {"engine": self.id})
+        return accent
+
+    def _add_words(self, reqs: List[EngineRequest], added: List[Dict[str, Any]]) -> None:
+        """Every dictionary entry the run needs into the app's user dictionary (appended to `added` as it goes, so a
+        failure part-way still removes what was added)."""
+        seen = set()
+        for req in reqs:
+            for w in self.dictionary_words(req):
+                if (w["term"], w["reading"]) in seen:
+                    continue
+                seen.add((w["term"], w["reading"]))
+                accent, source = w["accent"], "dictionary"
+                if accent is None:
+                    accent, source = self._estimate_accent(w["reading"], parse_style_id(req.voice)), "engine"
+                raw = self._post("/user_dict_word", {"surface": w["term"], "pronunciation": w["reading"], "accent_type": accent,
+                                                     "word_type": DICT_WORD_TYPE, "priority": DICT_PRIORITY},
+                                 None, "application/json", 4096)
+                try:
+                    uuid = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    uuid = None
+                if not isinstance(uuid, str) or not re.match(r"^[0-9a-fA-F-]{8,64}$", uuid):
+                    raise DubbingError("INVALID_RESULT", "VOICEVOX /user_dict_word did not return a word id", {"engine": self.id})
+                added.append({"term": w["term"], "reading": w["reading"], "accent": accent, "accent_source": source, "uuid": uuid})
+
+    def _remove_words(self, added: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Each added word removed again; returns those that could not be (left in the app, reported)."""
+        left = []
+        for w in added:
+            try:
+                self._post(f"/user_dict_word/{w['uuid']}", {}, None, "application/json", 4096, method="DELETE")
+            except DubbingError as e:
+                left.append(dict(w, error=e.message))
+        return left
+
     def process_batch(self, reqs: List[EngineRequest]) -> List[EngineResult]:
         info = self.require()                             # GET /version: the app is there and in range
         for req in reqs:
             self.check_request(req)                       # GET /speakers once: voice, character, terms
+        added: List[Dict[str, Any]] = []
+        try:
+            self._add_words(reqs, added)
+            results = self._synthesise(reqs, info)
+        finally:
+            left = self._remove_words(added)
+        if added:
+            summary = {"added": [{k: w[k] for k in ("term", "reading", "accent", "accent_source")} for w in added],
+                       "removed": len(added) - len(left), "left": [{k: w[k] for k in ("term", "uuid", "error")} for w in left],
+                       "priority": DICT_PRIORITY, "word_type": DICT_WORD_TYPE}
+            for r in results:
+                r.extra["user_dictionary"] = summary
+        return results
+
+    def _synthesise(self, reqs: List[EngineRequest], info: Dict[str, Any]) -> List[EngineResult]:
         results = []
         for req in reqs:
             style_id = parse_style_id(req.voice)
@@ -258,5 +356,6 @@ class VoicevoxEngine(Engine):
             results.append(EngineResult(output_path=req.output_path, engine_version=str(info.get("version")), model=None,
                                         sample_rate=rate,
                                         extra={"voice": str(style_id), "seed": None, "credit": voice,
+                                               "reading": query.get("kana") if isinstance(query.get("kana"), str) else None,
                                                "parameters": {k: query.get(k) for k in RECORDED_QUERY_FIELDS if k in query}}))
         return results
