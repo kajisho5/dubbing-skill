@@ -216,6 +216,18 @@ class TranscriptCheckTests(unittest.TestCase):
         self.assertEqual(doc["heard"]["summary"]["written_only"], ["口腔", "腹腔"])
         self.assertTrue(any("only as written" in w for w in doc["warnings"]), doc["warnings"])
 
+    def test_kana_inside_a_longer_word_is_not_the_reading(self):
+        # the tokenizer's words: チョウフク is one word, so its first four kana are not チョウフ; チョウフ|シテ is two
+        pron._BOUNDARIES = lambda text: {0, len(text)} | {m.end() for m in __import__("re").finditer("チョウフク|チョウフ|背中に|コウクウ", text)} \
+            | {m.start() for m in __import__("re").finditer("チョウフク|チョウフ|コウクウ", text)}
+        self.addCleanup(setattr, pron, "_BOUNDARIES", None)
+        doc = self.check("口腔内を観察し、腹腔鏡で確認します。", "背中にチョウフクしてください。", "コウクウケア。")
+        h = {t["term"]: t for t in doc["heard"]["terms"]}
+        self.assertEqual((h["貼付"]["as_kana"], h["貼付"]["status"]), (0, "not_heard"))
+        doc = self.check("口腔内を観察し、腹腔鏡で確認します。", "背中にチョウフしてください。", "コウクウケア。")
+        h = {t["term"]: t for t in doc["heard"]["terms"]}
+        self.assertEqual((h["貼付"]["as_kana"], h["口腔"]["as_kana"], h["口腔"]["status"]), (1, 1, "written"))
+
     def test_kana_is_read_as_itself(self):
         doc = self.check("こーくうないを観察し、ふくくうきょうで確認します。", "背中にチョウフしてください。", "コウクウケア。")
         self.assertEqual(self.statuses(doc), {"口腔": "heard", "腹腔": "heard", "貼付": "heard"})

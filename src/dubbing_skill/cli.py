@@ -293,7 +293,9 @@ def _human(doc: Dict[str, Any]) -> None:
         if doc.get("heard"):
             h = doc["heard"]
             print(f"  transcript: {h['summary']['heard']} of {h['summary']['terms']} term(s) heard; "
-                  f"not heard: {h['summary']['not_heard']}")
+                  f"not heard: {h['summary']['not_heard']}; only written back: {h['summary']['written_only']}")
+        for w in doc.get("warnings", []):
+            print(f"  warning: {w}")
     elif doc.get("op") == "fit":
         sm = doc["summary"]
         print(f"{doc['input']['cues']}: {sm['lines']} line(s): {sm['fit']} fit, {sm['tempo']} sped up "

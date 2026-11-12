@@ -711,7 +711,7 @@ Roadmap step 12: a per-project dictionary (term, reading, accent where the engin
 
 - **Input**: a transcription-skill Transcript (`transcription-skill/transcript/*`) of the output. The segment text is joined, NFKC-normalised, and stripped of spaces and punctuation.
 - **Per term the script uses**, counted against how often the script uses it:
-  - `as_kana`: the reading in kana. Hiragana and katakana are folded, and long vowels are spelled as they sound (the folding `confirmed` uses).
+  - `as_kana`: the reading in kana. Hiragana and katakana are folded, and long vowels are spelled as they sound (the folding `confirmed` uses). With the reading dictionary, the kana must start and end on word boundaries from its tokenizer, so チョウフ inside チョウフク does not count.
   - `as_homophone`: another written form whose characters read as the reading. Every run of up to six characters takes any reading the Japanese dictionary gives it (SudachiPy with SudachiDict core, Apache-2.0), and kana reads as itself. The joined readings must spell the reading exactly, over whole characters, so 重複 (チョウフク) is not チョウフ.
   - `as_written`: the term itself written back. This cannot show the reading: SudachiDict gives 口腔 both コウクウ and コウコウ. A span that is the term itself is therefore never counted as a homophone.
 - **Status**: `heard` when kana plus homophones reach the script's count; `written` when only the term written back makes up the count; `partly` or `not_heard` otherwise. `summary.not_heard` and `summary.written_only` are warned about.

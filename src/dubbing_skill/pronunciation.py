@@ -346,6 +346,7 @@ HEARD_LIMIT = ("a transcript is written text: the term itself written back (stat
 READINGS_INSTALL = "pip install sudachipy sudachidict_core   (or: pip install \"dubbing-skill[readings]\")"
 _MAX_SURFACE = 6
 _LOOKUP: Any = None                        # tests put a lookup here: surface -> set of katakana readings
+_BOUNDARIES: Any = None                    # and here: text -> the set of word boundaries (character offsets)
 
 
 def reading_lookup() -> Optional[Any]:
@@ -354,12 +355,25 @@ def reading_lookup() -> Optional[Any]:
     global _LOOKUP
     if _LOOKUP is not None:
         return _LOOKUP
+    global _BOUNDARIES
     try:
         from sudachipy import Dictionary as _SudachiDictionary  # type: ignore[import-not-found]
         sudachi = _SudachiDictionary(dict="core")
+        tokenizer = sudachi.create()
     except Exception:  # noqa: BLE001 - not installed, or no dictionary: the check runs without homophones
         return None
     cache: Dict[str, frozenset] = {}
+
+    def boundaries(text: str) -> set:
+        try:
+            out = {0}
+            for m in tokenizer.tokenize(text):
+                out.update((m.begin(), m.end()))
+            return out
+        except Exception:  # noqa: BLE001
+            return set(range(len(text) + 1))
+    if _BOUNDARIES is None:
+        _BOUNDARIES = boundaries
 
     def lookup(surface: str) -> frozenset:
         if surface not in cache:
@@ -415,6 +429,31 @@ def homophone_spans(text: str, reading: str, term: str, lookup: Any) -> List[Tup
     return spans
 
 
+def kana_spans(text: str, reading: str, bounds: Optional[set]) -> List[Tuple[int, int]]:
+    """Non-overlapping runs of kana in `text`, left to right, that sound as `reading` (phonetic_kana). With `bounds`
+    (word boundaries from the reading dictionary's tokenizer), a run must start and end on one, so チョウフ inside
+    the longer word チョウフク is not taken for it."""
+    target = phonetic_kana(reading)
+    spans: List[Tuple[int, int]] = []
+    if not target:
+        return spans
+    i = 0
+    while i < len(text):
+        hit = None
+        for j in range(i + 1, min(len(text), i + 3 * len(target)) + 1):
+            if not _is_kana(text[i:j]):
+                break
+            if phonetic_kana(text[i:j]) == target and (bounds is None or (i in bounds and j in bounds)):
+                hit = j
+                break
+        if hit:
+            spans.append((i, hit))
+            i = hit
+        else:
+            i += 1
+    return spans
+
+
 def _transcript_text(doc: Dict[str, Any]) -> str:
     return "".join(str(seg.get("text") or "") for seg in doc.get("segments") or [] if isinstance(seg, dict))
 
@@ -440,17 +479,16 @@ def heard_check(transcript_path: str, entries: Sequence[Entry], expected: Dict[s
                            f"(schema {TRANSCRIPT_SCHEMA_PREFIX}*, with segments)", {"input": transcript_path})
     raw = _transcript_text(doc)
     text = _TRANSCRIPT_DROP.sub("", unicodedata.normalize("NFKC", raw))
-    sounds = phonetic_kana(text)
     japanese = lang.lower().split("-")[0] == "ja"
     lookup = reading_lookup() if japanese else None
+    bounds = _BOUNDARIES(text) if lookup is not None and _BOUNDARIES is not None else None
     prov = doc.get("provenance") if isinstance(doc.get("provenance"), dict) else {}
     terms: List[Dict[str, Any]] = []
     for e in sorted((e for e in entries if expected.get(e.term)), key=lambda e: e.term):
         want = expected[e.term]
         term = unicodedata.normalize("NFKC", e.term)
         written = _count(_pattern(term), text)
-        reading = phonetic_kana(_TRANSCRIPT_DROP.sub("", e.reading))
-        as_kana = sounds.count(reading) if reading else 0
+        as_kana = len(kana_spans(text, _TRANSCRIPT_DROP.sub("", e.reading), bounds))
         spans = homophone_spans(text, e.reading, term, lookup) if lookup else []
         as_reading = as_kana + len(spans)
         status = ("heard" if as_reading >= want else "written" if as_reading + written >= want
