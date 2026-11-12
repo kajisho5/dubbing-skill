@@ -697,15 +697,24 @@ Roadmap step 12: a per-project dictionary (term, reading, accent where the engin
 ### Done when, checked
 
 - **Met, through the engine's own reading**: on the fixture `tests/fixtures/pronunciation/medical_ja.{json,txt}` (口腔 → コウクウ, 腹腔 → フククウ, 貼付 → チョウフ, three lines, four occurrences) the real VOICEVOX 0.26.0 in the `voicevox` CI job reads every occurrence as the dictionary says, and its user dictionary holds none of the words afterwards (`test_real_voicevox_reads_the_dictionary_terms`). On the fake app the same run checks the request shapes, the accents and the clean-up.
-- **Met, checked by transcription-skill on the output** ([#21](https://github.com/kajisho5/dubbing-skill/pull/21)). In the `voicevox` CI job the fixture is narrated through the real VOICEVOX 0.26.0 with the dictionary, and once without it as a control. transcription-skill (faster-whisper 1.2.1, the `base` model, `--language ja`, no prompt and no vocabulary, so nothing tells the recogniser the terms) transcribes both outputs, and `dubbing terms --transcript` checks each. Measured:
+- **Met, checked by transcription-skill on the output** ([#21](https://github.com/kajisho5/dubbing-skill/pull/21)). In the `voicevox` CI job the fixture is narrated through the real VOICEVOX 0.26.0 with the dictionary, and once without it as a control. transcription-skill transcribes both outputs with two small Whisper models: faster-whisper 1.2.1 `base` and `small`, with `--language ja` and no prompt or vocabulary, so nothing tells the recogniser the terms. `dubbing terms --transcript` then checks each transcript. Measured in one run:
 
-  | run | VOICEVOX's own reading (AudioQuery kana) of 口腔 / 腹腔 / 貼付 | transcript (faster-whisper base) | heard as the dictionary reads it | not heard |
-  |---|---|---|---|---|
-  | with the dictionary | コウクウ / フククウ / チョウフ | 航空内を観察し、福空教で確認します。シットは1日1回、背中に調布してください。航空系は毎食後に行います。 | 口腔 (航空 ×2), 腹腔 (福空), 貼付 (調布) | none |
-  | without (control) | コオコオ / フクコオ / チョオフ | 高校内を観察し、復興教で確認します。シットは1日1回、背中に調布してください。高校経は毎食後に行います。 | 貼付 (調布) | 口腔 (高校), 腹腔 (復興) |
+  | run | VOICEVOX's own reading (AudioQuery kana) of 口腔 / 腹腔 / 貼付 | model | transcript | heard as the dictionary reads it | not heard |
+  |---|---|---|---|---|---|
+  | with the dictionary | コウクウ / フククウ / チョウフ | base | 航空内を観察し、福空教で確認します。シットは1日1回、背中に調付してください。航空ケアは毎食後に行います。 | 口腔 (航空 ×2), 腹腔 (福空), 貼付 (調付) | none |
+  | with the dictionary | | small | 航空内を観察し、福空鏡で確認しますシットは1日1回、背中に重複してください航空ケアは毎食後に行います | 口腔 (航空 ×2), 腹腔 (福空) | 貼付 (重複, チョウフク) |
+  | without (control) | コオコオ / フクコオ / チョオフ | base | 高校内を観察し、復興教で確認します。シットは1日1回、背中に調布してください。高校経は毎食後に行います。 | 貼付 (調布) | 口腔 (高校), 腹腔 (復興) |
+  | without (control) | | small | 高校内を観察し、福岡郷で確認しますシットは1日1回、背中に重複してください高校ケアは毎食後に行います | none | all three |
 
-  On its own, VOICEVOX already reads 貼付 as チョウフ, so only 口腔 and 腹腔 tell the two runs apart. An earlier run, before PyAV was pinned, heard 調付 for 貼付 and gave the same verdicts. The transcript can change a little between environments. The verdicts did not change.
-  The recogniser never wrote the terms themselves. It wrote what it heard as other words with the same sound (航空 for コウクウ, 高校 for コウコウ), so the readings can be told apart after all. CI asserts that every term is heard in the run with the dictionary, and that 口腔 and 腹腔 are not heard in the control. The `small` model was measured too and not chosen: it wrote 重複 (チョウフク) for 貼付 in both runs.
+  The recogniser never wrote the terms themselves. It wrote what it heard as other words with the same sound: 航空 for コウクウ, and 高校 for コウコウ. So the readings can be told apart after all.
+
+  On its own, VOICEVOX already reads 貼付 as チョウフ, so only 口腔 and 腹腔 tell the two runs apart.
+
+  A small model mishears some words, and differently from one CI machine to the next. In other runs `base` wrote 複雇共 for 腹腔 and 調布 for 貼付; the audio was the same, and VOICEVOX is deterministic (ADR-016). So in CI a term counts as heard when either model heard it.
+
+  CI asserts two things:
+  - With the dictionary, all three terms are heard.
+  - In the control, neither model hears 口腔 or 腹腔.
 
 ### The transcript check (`dubbing terms --transcript`)
 
