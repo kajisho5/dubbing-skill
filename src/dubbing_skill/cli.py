@@ -74,13 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("script", help="cues (.json, .srt, .vtt) or plain text (.txt, one utterance per line)")
     n.add_argument("-o", "--output", required=True, help="the timeline .wav (mono, at the engine's rate)")
     n.add_argument("--lang", required=True, help="the language the text is already in (ja, en, ...); nothing is translated")
-    n.add_argument("--engine", help="engine id (default: chatterbox; voicevox: the VOICEVOX app on loopback)")
+    n.add_argument("--engine", help="engine id (default: chatterbox; voicevox: the VOICEVOX app on loopback; qwen3_tts: experimental, a reference voice only)")
     n.add_argument("--voice", help="engine voice (chatterbox: its built-in voice only; voicevox: a style id, default 3, "
                                    "the zundamon normal style)")
     n.add_argument("--accept-unverified-voice-terms", action="store_true",
                    help="use a VOICEVOX character whose terms this skill has not verified (you checked them); the credit is "
                         "recorded as unverified (ADR-006)")
-    n.add_argument("--reference", help="a reference voice to speak in (voice cloning; chatterbox): needs --consent")
+    n.add_argument("--reference", help="a reference voice to speak in (voice cloning; chatterbox, qwen3_tts): needs --consent")
     n.add_argument("--consent", help="the consent record (dubbing/consent@1 JSON) of the person whose voice --reference is: who "
                                      "consented, when, for what, and the evidence files (ADR-009); there is no way to skip it")
     n.add_argument("--profile", help="a voice profile (dubbing/voice-profile@1 JSON: id, engine, voice or consented reference, speed, pitch, "
@@ -103,7 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--lang", required=True, help="the language the translated text is in; nothing is translated here")
     b.add_argument("--source-cues", help="the source cues the translation is of: checked to be the same segments; the source "
                                          "text hash is recorded per line")
-    b.add_argument("--engine", help="engine id (default: chatterbox)")
+    b.add_argument("--engine", help="engine id (default: chatterbox; also style_bert_vits2, and qwen3_tts: experimental, "
+                                    "reference voices only)")
     b.add_argument("--voice", help="the voice for every speaker without its own (chatterbox: its built-in voice only)")
     b.add_argument("--speaker-voice", action="append", default=[], metavar="SPEAKER=VOICE",
                    help="a voice for one cue speaker (repeatable)")
@@ -144,7 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"--detect-gaps: the shortest quiet stretch that counts as a gap, in seconds (default {DEFAULT_MIN_GAP:g})")
     a.add_argument("--silence-threshold", type=float, default=DEFAULT_SILENCE_THRESHOLD,
                    help=f"--detect-gaps: the level in dBFS below which the programme is quiet (default {DEFAULT_SILENCE_THRESHOLD:g})")
-    a.add_argument("--engine", help="engine id (default: chatterbox; also voicevox, kokoro, style_bert_vits2)")
+    a.add_argument("--engine", help="engine id (default: chatterbox; also voicevox, kokoro, style_bert_vits2, and qwen3_tts: "
+                                    "experimental, a reference voice only)")
     a.add_argument("--voice", help="engine voice (voicevox: a style id)")
     a.add_argument("--accept-unverified-voice-terms", action="store_true",
                    help="use a VOICEVOX character whose terms this skill has not verified (ADR-006)")

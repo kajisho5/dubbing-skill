@@ -164,9 +164,18 @@ def select_engine(op: str, engine_id: Optional[str], offline: bool = False) -> T
     report = engine.report(offline=offline)
     if report["status"] != OK:
         code = "MODEL_NOT_FOUND" if report.get("missing") == "model" else "ENGINE_UNAVAILABLE"
-        raise DubbingError(code, f"engine {eid!r} is {report['status']}: {report.get('detail')}",
-                           {"engine": eid, "status": report["status"], "install": engine.spec.install})
+        details = {"engine": eid, "status": report["status"], "install": engine.spec.install}
+        if report.get("download"):                # the one command that fetches the missing weights (ADR-018)
+            details["download"] = report["download"]
+        raise DubbingError(code, f"engine {eid!r} is {report['status']}: {report.get('detail')}", details)
     return engine, report
+
+
+def engine_warnings(engine: Engine) -> List[str]:
+    """What every op says about the engine it ran: an experimental engine (ADR-018) is named with its reason."""
+    if engine.spec.experimental:
+        return [f"engine {engine.id!r} is experimental: {engine.spec.experimental_reason}"]
+    return []
 
 
 def _usable_skill(skill: Optional[FfmpegSkill], directory: Optional[str], timeout: float) -> Tuple[FfmpegSkill, SkillInfo]:
@@ -443,7 +452,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         shutil.rmtree(run_dir, ignore_errors=True)
     out_audio = out_facts.get("audio") or {}
     pronunciation = pron.report(results)
-    warnings = pron.warnings(pronunciation)
+    warnings = engine_warnings(engine) + pron.warnings(pronunciation)
     if plan["overflows"]:
         warnings.append(f"{len(plan['overflows'])} line(s) were pushed back (--on-overflow shift); the last drift is "
                         f"{plan['segments'][-1].get('drift', 0.0):.3f}s")

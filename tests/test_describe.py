@@ -217,7 +217,7 @@ class DescribeCliAndContractTests(unittest.TestCase):
         tool = next(t for t in c["tools"] if t["tool_id"] == "dubbing/audio-description")
         self.assertTrue(tool["implemented"])
         self.assertEqual((tool["schema"], tool["argv"][0]), (DESCRIBE_SCHEMA, "describe"))
-        self.assertEqual(tool["engines"], ["chatterbox", "kokoro", "style_bert_vits2", "voicevox"])
+        self.assertEqual(tool["engines"], ["chatterbox", "kokoro", "qwen3_tts", "style_bert_vits2", "voicevox"])
         ff = next(d for d in c["dependencies"] if d["id"] == "ffmpeg-skill")
         self.assertEqual(ff["optional_tools"]["silence"]["flags"], ["input", "list", "threshold", "min_silence", "json"])
 

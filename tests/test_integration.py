@@ -58,13 +58,13 @@ class FfmpegSkillIntegrationTests(unittest.TestCase):
                 skill.probe(not_media)
             self.assertEqual(e.exception.code, "UNSUPPORTED_MEDIA")
 
-    def test_doctor_with_real_ffmpeg_skill_lists_all_four_engines(self):
+    def test_doctor_with_real_ffmpeg_skill_lists_all_five_engines(self):
         with tempfile.TemporaryDirectory() as tmp, env(**no_engines_env(tmp)):
             d = doctor(str(FFMPEG_SKILL_DIR))
             rc, cli_doc = run_cli("doctor", "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")
         self.assertEqual(d["checks"]["ffmpeg_skill"]["status"], "OK", d["problems"])
         self.assertEqual((d["checks"]["ffmpeg"]["status"], d["checks"]["ffprobe"]["status"]), ("OK", "OK"))
-        self.assertEqual(sorted(d["checks"]["engines"]), ["chatterbox", "kokoro", "style_bert_vits2", "voicevox"])
+        self.assertEqual(sorted(d["checks"]["engines"]), ["chatterbox", "kokoro", "qwen3_tts", "style_bert_vits2", "voicevox"])
         self.assertEqual(d["checks"]["engines"]["voicevox"]["status"], "MISSING")
         self.assertIn(d["status"], ("degraded", "ok"))
         self.assertEqual((rc, cli_doc["status"]), (0, d["status"]))

@@ -1,0 +1,100 @@
+# Heavy test jobs, manual trigger only: they install a large runtime and fetch model weights, so they are kept out of
+# tests.yml (which runs on every pull request and push to main) and never show up as pull-request checks. Run from the
+# Actions tab or `gh workflow run heavy-tests.yml --ref <branch>`.
+name: heavy tests
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: heavy-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qwen3_tts:
+    # The optional, experimental Qwen3-TTS engine for real (ADR-018): qwen-tts 0.1.1 in its own virtual environment on the
+    # CPU build of PyTorch, the 0.6B Base checkpoint fetched once at the revision the engine pins and checked against the
+    # SHA-256 Hugging Face publishes for its two LFS files (CI only; the skill itself never downloads), and one short
+    # English sentence narrated twice with the same seed in a synthetic reference voice made here with espeak-ng (no
+    # person's voice), with its consent record. The real-engine test that skips everywhere else must run and pass here.
+    # Measured: wall time per run (model load included), the clip's length, peak memory, and whether the two runs match.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      QWEN_TTS_VERSION: "0.1.1"
+      TORCH_VERSION: "2.8.0"
+      QWEN3_TTS_REPO: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+      QWEN3_TTS_REVISION: 5d83992436eae1d760afd27aff78a71d676296fc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/ffmpeg-skill
+          path: vendor/ffmpeg-skill
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng time
+      - name: qwen-tts in its own virtual environment (CPU PyTorch)
+        run: |
+          set -eu
+          python -m venv "$RUNNER_TEMP/qwen3-tts"
+          q="$RUNNER_TEMP/qwen3-tts/bin/python"
+          "$q" -m pip install --no-cache-dir --upgrade pip
+          "$q" -m pip install --no-cache-dir "torch==$TORCH_VERSION" "torchaudio==$TORCH_VERSION" --index-url https://download.pytorch.org/whl/cpu
+          "$q" -m pip install --no-cache-dir "qwen-tts==$QWEN_TTS_VERSION"
+          "$q" -m pip list | grep -i -E "^(qwen-tts|torch|torchaudio|transformers|accelerate|librosa|soundfile|sox|onnxruntime|numpy|huggingface.hub) " | tee pip-list.txt
+          echo "DUBBING_QWEN3_TTS_PYTHON=$q" >> "$GITHUB_ENV"
+          echo "HF_HUB_CACHE=$HOME/.cache/huggingface/hub" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: qwen3-tts-12hz-0.6b-base-5d83992436eae1d760afd27aff78a71d676296fc
+      - name: Fetch the 0.6B Base checkpoint at the pinned revision (SHA-256 checked)
+        run: |
+          "$DUBBING_QWEN3_TTS_PYTHON" - <<'EOF'
+          import hashlib, os
+          from huggingface_hub import snapshot_download
+          path = snapshot_download(os.environ["QWEN3_TTS_REPO"], revision=os.environ["QWEN3_TTS_REVISION"])
+          lfs_sha256 = {
+              "model.safetensors": "180b3b10eb1c9f1b4db7806d5475bae3071c0243c299d49926bab1da3b6946f6",
+              "speech_tokenizer/model.safetensors": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+          }
+          for name, want in lfs_sha256.items():
+              h = hashlib.sha256()
+              with open(os.path.join(path, name), "rb") as fh:
+                  for block in iter(lambda: fh.read(1 << 20), b""):
+                      h.update(block)
+              assert h.hexdigest() == want, (name, h.hexdigest())
+              print(name, os.path.getsize(os.path.join(path, name)), "sha256 ok")
+          print(path)
+          EOF
+      - name: A synthetic reference voice (espeak-ng; no person's voice)
+        run: |
+          espeak-ng -v en-us -s 160 -w "$RUNNER_TEMP/reference.wav" "This is a synthetic reference voice. It was made for this test and belongs to no person."
+          ffprobe -hide_banner -show_entries format=duration:stream=sample_rate,channels -of compact "$RUNNER_TEMP/reference.wav"
+          echo "DUBBING_QWEN3_TTS_TEST_REFERENCE=$RUNNER_TEMP/reference.wav" >> "$GITHUB_ENV"
+      - run: python -m pip install -e .
+      - name: doctor reports Qwen3-TTS OK, the 0.6B checkpoint at its pinned revision, experimental
+        env:
+          DUBBING_QWEN3_TTS_MODEL: "0.6B"
+        run: |
+          dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); q=d['checks']['engines']['qwen3_tts']; assert q['status']=='OK' and q['model']=='$QWEN3_TTS_REPO' and q['revision']=='$QWEN3_TTS_REVISION' and q['revision_pinned'] and q['experimental'], q; assert d['checks']['operations']['narrate']['engine']=='chatterbox', d['checks']['operations']"
+      - name: Qwen3-TTS tests, the real-engine one included (CPU)
+        env:
+          DUBBING_REAL_QWEN3_TTS: "1"
+          DUBBING_QWEN3_TTS_MODEL: "0.6B"
+          DUBBING_QWEN3_TTS_DEVICE: cpu
+          DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
+        run: |
+          set -o pipefail
+          export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
+          /usr/bin/time -v -o time.log python -m unittest discover -s tests -p test_qwen3_tts.py -v 2>&1 | tee test.log
+          ! grep -E "\.\.\. skipped" test.log
+          grep -E "^test_real_qwen3_tts_narrates_english .*\.\.\. ok$" test.log || { echo "::error::test_real_qwen3_tts_narrates_english did not run and pass"; exit 1; }
+          { echo "### Real Qwen3-TTS 0.6B Base on CPU (NARRATE, one English sentence, a synthetic reference voice, seed 0 twice)"; echo;
+            echo "| model | lang | chars | clip s | wall s (run 1 / run 2, model load included) | wall / clip | same seed, same audio |";
+            echo "|---|---|---|---|---|---|---|"; cat "$DUBBING_MEASURE_LOG"; echo;
+            echo "Peak memory of the test run (the engine worker included): $(grep 'Maximum resident' time.log)"; echo;
+            echo '```'; cat pip-list.txt; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"

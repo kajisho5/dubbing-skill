@@ -45,8 +45,8 @@ from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill
 from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, output_kind, programme_layout, render, tolerance,
                      validate_output, watermark_summary)
-from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, not_an_output, select_engine, unique_consents,
-                  unique_credits, validate_clip, voice_request_fields)
+from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, engine_warnings, not_an_output, select_engine,
+                  unique_consents, unique_credits, validate_clip, voice_request_fields)
 from .disclosure import build_disclosure
 from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
@@ -327,7 +327,7 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
     pronunciation = pron.report(results)
-    warnings = pron.warnings(pronunciation)
+    warnings = engine_warnings(engine) + pron.warnings(pronunciation)
     if plan["unfit"]:
         warnings.append(f"{len(plan['unfit'])} line(s) did not fit their segment and keep the original dialogue (--on-unfit keep): "
                         f"{[u['index'] for u in plan['unfit']]}; their length budgets are in fit.unfit[].budget")

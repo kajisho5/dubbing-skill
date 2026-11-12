@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from . import SKILL_ID, __version__
 
-ENGINE_FIELDS = ("id", "version", "model", "code_license", "weights_license", "credit", "credit_required", "watermark",
-                 "execution_mode", "deterministic", "licence_checked")
+ENGINE_FIELDS = ("id", "version", "model", "revision", "code_license", "weights_license", "credit", "credit_required",
+                 "watermark", "execution_mode", "deterministic", "experimental", "licence_checked")
 
 
 def sha256_file(path: str, chunk: int = 1 << 20) -> str:
@@ -30,6 +30,8 @@ def build_provenance(*, op: str, engine: Dict[str, Any], text: str, output_path:
                      credits: Optional[List[Dict[str, Any]]] = None, consent: Any = None,
                      voice_profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """`engine` is an engine report (Engine.report()); only publishable fields are copied (no local paths, no URLs).
+    `engine.revision` is the model's Hugging Face revision where the engine reports one (Qwen3-TTS, ADR-018), else None;
+    `engine.experimental` says the engine's quality is not settled (ADR-018).
     `translation` is what the caller says about the text it supplied (ADR-003); it is recorded, never produced here.
     `watermark` is what was observed on this output (the engine's mark read back), next to the engine's declared
     `engine.watermark`; None when the engine embeds none. `credits` are the credits this output must carry, resolved

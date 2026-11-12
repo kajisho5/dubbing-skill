@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from . import PACKAGE_NAME, SKILL_ID, __version__
 from .doctor import DOCTOR_SCHEMA, IMPLEMENTED_OPS, OP_STEP, TRANSLATION
-from .engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
+from .engines import DEFAULT_ENGINE, engine_ids, engines_for, experimental_engines, get_engine
 from .engines.voicevox import DEFAULT_STYLE_ID as VOICEVOX_DEFAULT_STYLE, VERIFIED_CHARACTERS
 from .errors import ERROR_TABLE
 from .cues import MAX_LINE_CHARS, MAX_LINES
@@ -100,7 +100,8 @@ _OP_TOOLS = {
                                "one mono timeline WAV through ffmpeg-skill (pad + join), validated through ffmpeg-skill/probe",
                 "inputs": ["cues (CUES_INPUT: .json, .srt, .vtt) or plain text (.txt, one utterance per line, back to back)",
                            "the engine's built-in voice (voicevox: a style id, default 3), or a reference voice (--reference, "
-                           "chatterbox) with its owner's consent record (--consent, CONSENT_RECORD, ADR-009)"],
+                           "chatterbox, qwen3_tts) with its owner's consent record (--consent, CONSENT_RECORD, ADR-009); "
+                           "qwen3_tts has no built-in voice"],
                 "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox|voicevox]",
                          "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--accept-unverified-voice-terms]", "[--profile <profile.json>]", "[--pronunciation <dict.json>]", "[--translation-note <json>]", "[--seed 0]",
                          "[--on-overflow fail|shift]",
@@ -160,7 +161,8 @@ _OP_TOOLS = {
                    "the engine's voice (voicevox: a style id), or a reference voice with its owner's consent record (ADR-009)"],
         "argv": ["describe", "<video|audio>", "<descriptions.json|.srt|.vtt>", "--lang <ja>", "-o <out.mp4|out.mov|out.mkv|out.wav>",
                  "--gaps <gaps.json> | --detect-gaps", f"[--min-gap {DEFAULT_MIN_GAP:g}]",
-                 f"[--silence-threshold {DEFAULT_SILENCE_THRESHOLD:g}]", "[--engine chatterbox|voicevox|kokoro|style_bert_vits2]",
+                 f"[--silence-threshold {DEFAULT_SILENCE_THRESHOLD:g}]",
+                 "[--engine chatterbox|voicevox|kokoro|style_bert_vits2|qwen3_tts]",
                  "[--voice <id>]", "[--accept-unverified-voice-terms]", "[--reference <voice.wav> --consent <consent.json>]",
                  "[--audio-stream 0]", "[--on-unfit fail|skip]", f"[--duck {DEFAULT_DUCK_DB:g}]",
                  f"[--voice-gain {DEFAULT_VOICE_GAIN_DB:g}]", "[--profile <profile.json>]", "[--pronunciation <dict.json>]", "[--seed 0]", "[--timeout 3600]",
@@ -271,7 +273,7 @@ def contract() -> Dict[str, Any]:
         deps.append({"id": eid, "kind": "engine-" + s.kind, "required": False, "for": [CAPABILITY_IDS[o] for o in s.ops],
                      "version_range": s.version_range, "license": s.code_license, "weights_license": s.weights_license,
                      "credit_required": s.credit_required, "watermark": s.watermark, "install": s.install,
-                     "located_by": list(s.located_by), "downloaded_at_run_time": False})
+                     "located_by": list(s.located_by), "downloaded_at_run_time": False, "experimental": s.experimental})
     return {
         "skill_id": SKILL_ID,
         "id": SKILL_ID,
@@ -296,6 +298,10 @@ def contract() -> Dict[str, Any]:
                     "default": dict(DEFAULT_ENGINE),
                     "selection_adr": "docs/decisions.md ADR-001",
                     "optional": True,
+                    "experimental": experimental_engines(),
+                    "experimental_policy": "never a default; every op that uses one adds a warning with its reason "
+                                           "(engines.registered.<id>.experimental_reason) and records engine.experimental in "
+                                           "the provenance; judge its quality by listening before relying on it (ADR-018)",
                     "statuses": ["OK", "MISSING", "INCOMPATIBLE"]},
         "policy": {"voice_cloning": "a reference voice (or a model trained on a real person's voice) is used only with a "
                                     "consent record of that person that checks out (CONSENT_RECORD, ADR-009): the op verifies it "

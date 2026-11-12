@@ -61,6 +61,8 @@ class EngineSpec:
     controls: Tuple[str, ...] = ()            # voice controls a request may set (a voice profile, ADR-016): "speed", "pitch"
     reference_kind: str = "audio"             # what a reference voice is: "audio" (a clip, probed through ffmpeg-skill) or
                                               # "model" (a voice model trained on the person, Style-Bert-VITS2, ADR-011)
+    experimental: bool = False                # an optional engine whose quality is not settled: never a default, and every
+    experimental_reason: Optional[str] = None # op that uses it warns with this reason (Qwen3-TTS, ADR-018)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -147,8 +149,10 @@ class Engine:
         info = self.inspect()
         if info["status"] != OK:
             code = "MODEL_NOT_FOUND" if info.get("missing") == "model" else "ENGINE_UNAVAILABLE"
-            raise DubbingError(code, f"engine {self.id!r} is {info['status']}: {info.get('detail')}",
-                               {"engine": self.id, "install": self.spec.install})
+            details = {"engine": self.id, "install": self.spec.install}
+            if info.get("download"):
+                details["download"] = info["download"]
+            raise DubbingError(code, f"engine {self.id!r} is {info['status']}: {info.get('detail')}", details)
         return info
 
     def check_request(self, req: EngineRequest) -> None:

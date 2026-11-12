@@ -181,7 +181,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(c["inputs"]["voice_profile"]["schema"], VOICE_PROFILE_SCHEMA)
         self.assertIn("voice_profile", c["provenance"]["fields"])
         controls = {eid: e["controls"] for eid, e in c["engines"]["registered"].items()}
-        self.assertEqual(controls, {"chatterbox": [], "kokoro": ["speed"], "style_bert_vits2": [], "voicevox": ["speed", "pitch"]})
+        self.assertEqual(controls, {"chatterbox": [], "kokoro": ["speed"], "qwen3_tts": [], "style_bert_vits2": [],
+                                    "voicevox": ["speed", "pitch"]})
         tools = {t["tool_id"]: t for t in c["tools"]}
         for op in ("narrate", "dub", "audio-description"):
             self.assertIn("[--profile <profile.json>]", tools[f"dubbing/{op}"]["argv"])
