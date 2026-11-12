@@ -1,11 +1,11 @@
 # Roadmap — dubbing-skill
 
-Part of the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS/blob/main/docs/ecosystem/ROADMAP.md) ecosystem: department **音 (Audio)**, status `scaffold`.
+Part of the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS/blob/main/docs/ecosystem/ROADMAP.md) ecosystem: department **音 (Audio)**, status `active`.
 Written from a read-only audit of this repository on 2026-10-30. Each step below is meant to be one pull request; tick it off by linking the PR.
 
 ## Where it stands
 
-0.1.0: NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)), DUB ([#7](https://github.com/kajisho5/dubbing-skill/pull/7)) and AUDIO_DESCRIPTION ([#9](https://github.com/kajisho5/dubbing-skill/pull/9)) are experimental, with all four engines synthesising ([#5](https://github.com/kajisho5/dubbing-skill/pull/5), [#10](https://github.com/kajisho5/dubbing-skill/pull/10)) and the consent gate for voice cloning ([#8](https://github.com/kajisho5/dubbing-skill/pull/8)). Skeleton ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contract` / `doctor` / `engines`, an engine registry whose EngineSpec carries licence, credit and watermark, and a worker. ADR-001 checked the licences of the engines from ecosystem.json / OS ADR-012 (code and weights): Chatterbox Multilingual V3 (default, MIT, watermarked; its Japanese path pulls in GPL pykakasi, so it gets its own venv), VOICEVOX (credit per voice), Style-Bert-VITS2 (AGPL, separate process), Kokoro-82M. ADR-003: translation is a caller input, and no engine is chosen. Cloning a real voice needs recorded consent.
+0.2.1, no release tag yet. 0.1.0: NARRATE ([#4](https://github.com/kajisho5/dubbing-skill/pull/4)), DUB ([#7](https://github.com/kajisho5/dubbing-skill/pull/7)) and AUDIO_DESCRIPTION ([#9](https://github.com/kajisho5/dubbing-skill/pull/9)) are experimental, with all four engines synthesising ([#5](https://github.com/kajisho5/dubbing-skill/pull/5), [#10](https://github.com/kajisho5/dubbing-skill/pull/10)) and the consent gate for voice cloning ([#8](https://github.com/kajisho5/dubbing-skill/pull/8)). Skeleton ([#3](https://github.com/kajisho5/dubbing-skill/pull/3)): `contract` / `doctor` / `engines`, an engine registry whose EngineSpec carries licence, credit and watermark, and a worker. ADR-001 checked the licences of the engines from ecosystem.json / OS ADR-012 (code and weights): Chatterbox Multilingual V3 (default, MIT, watermarked; its Japanese path pulls in GPL pykakasi, so it gets its own venv), VOICEVOX (credit per voice), Style-Bert-VITS2 (AGPL, separate process), Kokoro-82M. ADR-003: translation is a caller input, and no engine is chosen. Cloning a real voice needs recorded consent.
 
 ## What this repository owns
 
@@ -61,6 +61,8 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
 - [x] **15. Qwen3-TTS, an optional and experimental engine** — Qwen3-TTS-12Hz Base (1.7B, or 0.6B) for cloned voices only, with the consent gate of step 6; never a default, because a published human-preference ranking placed it low while the vendor's own metrics are strong ([#20](https://github.com/kajisho5/dubbing-skill/pull/20), [docs/decisions.md](docs/decisions.md) ADR-018)
   - Done when: doctor reports it with its pinned checkpoint and the download line; it runs through the real worker on a fake runtime in every CI run, and the real 0.6B on CPU in the manual heavy-tests workflow
   - Open: a listening comparison with Chatterbox before its status changes; cloning with a transcript of the reference (ICL)
+- [ ] **16. First release: tag and GitHub Release** — the status is `active` ([Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md): a repository that ships working operations behind its contract is `active`, released or not); release state is tracked here instead. Today `pyproject.toml` says 0.2.1, CHANGELOG.md says `unreleased` and there is no tag, so video-production-agent pins this contract from main. Date the CHANGELOG section, tag `v0.2.1` on main and publish a GitHub Release with that section as its notes. A release workflow like the other skills' (one job on push to main; CI-, docs- and test-only merges cut no release) can follow.
+  - Done when: the tag `v0.2.1` and its GitHub Release exist, `contract --json` reports the tag's version, and video-production-agent can pin the tag instead of main
 
 ## Boundaries
 
