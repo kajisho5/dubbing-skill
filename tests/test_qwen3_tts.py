@@ -60,6 +60,11 @@ def pkgs(version="0.1.1", python="3.12.3", module=True):
             "error": None}
 
 
+# qwen-tts needs Python >= 3.10, and the fake runtime runs under this interpreter, so on 3.9 the engine is (rightly)
+# INCOMPATIBLE: the synthesis tests run on 3.10+, and OnOldPythonTests checks the refusal on 3.9.
+NEW_PYTHON = sys.version_info >= (3, 10)
+
+
 class Qwen3TtsBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -191,6 +196,17 @@ class LookupTests(unittest.TestCase):
         self.assertEqual((r["status"], r["revision"]), ("OK", None))              # the user's own directory: no revision
 
 
+@unittest.skipIf(NEW_PYTHON, "this interpreter is Python >= 3.10; the refusal on 3.9 is checked in the 3.9 jobs")
+class OnOldPythonTests(Qwen3TtsBase):
+    def test_python_3_9_is_refused_before_any_work(self):
+        with qwen3_tts_ready(self.tmp.name) as site, self.assertRaises(DubbingError) as e:
+            self.narrate()
+        self.assertEqual((e.exception.code, e.exception.details["status"]), ("ENGINE_UNAVAILABLE", "INCOMPATIBLE"))
+        self.assertIn("Python >= 3.10", e.exception.message)
+        self.assertEqual(fake_chatterbox_calls(site), [])
+
+
+@unittest.skipUnless(NEW_PYTHON, "qwen-tts needs Python >= 3.10 (the fake runs under this interpreter)")
 class NarrateTests(Qwen3TtsBase):
     def test_narrate_clones_the_reference_with_its_consent(self):
         with qwen3_tts_ready(self.tmp.name) as site:
@@ -319,6 +335,7 @@ class NarrateTests(Qwen3TtsBase):
         self.assertEqual(e.exception.code, "INTERNAL_ERROR")
 
 
+@unittest.skipUnless(NEW_PYTHON, "qwen-tts needs Python >= 3.10 (the fake runs under this interpreter)")
 class DubTests(Qwen3TtsBase):
     def test_dub_with_a_reference_voice_per_speaker(self):
         programme = write_tone_wav(os.path.join(self.tmp.name, "programme.wav"), seconds=6.0, rate=QWEN_RATE, freq=440.0)
