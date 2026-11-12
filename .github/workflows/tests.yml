@@ -261,8 +261,9 @@ jobs:
           python -m venv "$RUNNER_TEMP/transcription"
           tr="$RUNNER_TEMP/transcription/bin"
           "$tr/python" -m pip install --upgrade pip
-          "$tr/python" -m pip install "./vendor/transcription-skill[faster-whisper]"
-          "$tr/python" -m pip list | grep -i -E "^(transcription-skill|faster-whisper|ctranslate2) "
+          # av pinned: faster-whisper 1.2.1 opens audio with av.open(metadata_errors=...), which PyAV 19 no longer takes
+          "$tr/python" -m pip install "./vendor/transcription-skill[faster-whisper]" "av==15.1.0"
+          "$tr/python" -m pip list | grep -i -E "^(transcription-skill|faster-whisper|ctranslate2|av) "
           for m in $WHISPER_MODELS; do "$tr/transcription" models pull "$m"; done
           echo "TRANSCRIPTION=$tr/transcription" >> "$GITHUB_ENV"
         env:
