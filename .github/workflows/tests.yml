@@ -274,13 +274,13 @@ jobs:
         run: |
           set -eu
           fx=tests/fixtures/pronunciation
-          dubbing narrate "$fx/medical_ja.txt" -o with.wav --lang ja --engine voicevox --pronunciation "$fx/medical_ja.json" --ffmpeg-skill vendor/ffmpeg-skill --json > with.json
-          dubbing narrate "$fx/medical_ja.txt" -o without.wav --lang ja --engine voicevox --ffmpeg-skill vendor/ffmpeg-skill --json > without.json
+          dubbing narrate "$fx/medical_ja.txt" -o with.wav --lang ja --engine voicevox --pronunciation "$fx/medical_ja.json" --ffmpeg-skill vendor/ffmpeg-skill --json > with.json || { cat with.json; exit 1; }
+          dubbing narrate "$fx/medical_ja.txt" -o without.wav --lang ja --engine voicevox --ffmpeg-skill vendor/ffmpeg-skill --json > without.json || { cat without.json; exit 1; }
           { echo "### Pronunciation dictionary checked by transcription-skill (real VOICEVOX 0.26.0, faster-whisper, no prompt)"; echo;
             echo "| model | run | heard | not heard | transcript |"; echo "|---|---|---|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
           for m in base small; do
             for run in with without; do
-              "$TRANSCRIPTION" transcribe "$run.wav" --language ja --model "$m" --no-cache --json -o "$run.$m.transcript.json" > /dev/null
+              "$TRANSCRIPTION" transcribe "$run.wav" --language ja --model "$m" --no-cache --json -o "$run.$m.transcript.json" > "$run.$m.out.json" || { cat "$run.$m.out.json"; exit 1; }
               dubbing terms "$fx/medical_ja.txt" --pronunciation "$fx/medical_ja.json" --lang ja --transcript "$run.$m.transcript.json" --json > "$run.$m.terms.json" || true
               python -c "import json,sys; h=json.load(open('$run.$m.terms.json', encoding='utf-8'))['heard']; print('| $m | $run | %d of %d | %s | %s |' % (h['summary']['heard'], h['summary']['terms'], ', '.join(h['summary']['not_heard']) or '-', h['transcript']['text']))" | tee -a "$GITHUB_STEP_SUMMARY"
             done

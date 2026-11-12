@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 - unreleased
+
+The pronunciation dictionary checked by transcription-skill on the output (roadmap step 12, ADR-015).
+
+- `dubbing terms <script> --pronunciation <dict.json> --lang <lang> --transcript <transcript.json>`: given transcription-skill's Transcript of the output, `heard` says for each dictionary term the script uses how often the transcript has it as written and as its reading, against how often the script says it, with `heard.summary.not_heard` (also warned about). Additive: `[--transcript <transcript.json>]` on the `dubbing/terms` tool.
+- CI (`voicevox` job): the three-term medical fixture is narrated through the real VOICEVOX with the dictionary and once without it as a control, both outputs transcribed by transcription-skill (faster-whisper, no prompt), and both checked.
+
 ## 0.2.0 - unreleased
 
 Qwen3-TTS, an optional and experimental engine (ADR-018).
