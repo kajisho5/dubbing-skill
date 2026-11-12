@@ -41,6 +41,7 @@ ENGINE_CLASS = "Qwen3TTSModel"
 SUPPORTED = ((0, 1, 1), (0, 2, 0))             # >=0.1.1 <0.2.0: the API below was read from 0.1.1
 MIN_PYTHON = (3, 10)                           # qwen-tts 0.1.1 evaluates `str | None` annotations at import time
 SAMPLE_RATE = 24000                            # speech_tokenizer/config.json output_sample_rate
+FRAME_SECONDS = 1920 / 24000                   # one codec frame (12.5 Hz): decode_upsample_rate / output_sample_rate
 MAX_NEW_TOKENS = 2048                          # codec frames at 12.5 Hz (about 164 s): the vendor's own evaluation setting;
                                                # the checkpoint's generation_config.json allows 8192 (about 655 s)
 CLONE_MODE = "x_vector_only"                   # the speaker embedding of the reference; no transcript of it is needed
@@ -275,6 +276,14 @@ class Qwen3TtsEngine(Engine):
             if not samples or isinstance(rate, bool) or not isinstance(rate, int) or rate <= 0:
                 raise DubbingError("INVALID_RESULT", "qwen3-tts returned an empty clip or no sample rate",
                                    {"engine": self.id, "sample_rate": rate})
+            # The runtime reports no stop reason: a clip of max_new_tokens frames is a line that ran out of frames, so its
+            # end may be missing. A 500-character line (cues.MAX_LINE_CHARS) is far shorter than that at any speaking rate,
+            # so this is a runaway generation; it is refused, never returned cut (x-vector clips have no reference prefix).
+            if len(samples) >= (MAX_NEW_TOKENS - 1) * FRAME_SECONDS * rate:
+                raise DubbingError("INVALID_RESULT", f"qwen3-tts reached its limit of {MAX_NEW_TOKENS} codec frames "
+                                   f"({MAX_NEW_TOKENS * FRAME_SECONDS:.0f} s) on one line, so the clip may be cut short; it is "
+                                   "refused. Split the line, or try another --seed", {"engine": self.id, "text_chars": len(req.text),
+                                                                                      "max_new_tokens": MAX_NEW_TOKENS})
             from .chatterbox import write_wav16
             write_wav16(req.output_path, samples, rate)
             params = {"clone_mode": CLONE_MODE, "language": LANGUAGES[req.lang], "max_new_tokens": MAX_NEW_TOKENS,

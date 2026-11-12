@@ -178,7 +178,7 @@ jobs:
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (VOICEVOX|Qwen3-TTS)"
+          if grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (VOICEVOX|Qwen3-TTS)"; then echo "::error::a test skipped"; exit 1; fi
           for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english test_real_chatterbox_dubs_a_video test_real_chatterbox_watermark_is_detected_and_disclosed; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done
@@ -244,7 +244,7 @@ jobs:
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (Chatterbox|Qwen3-TTS)"
+          if grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (Chatterbox|Qwen3-TTS)"; then echo "::error::a test skipped"; exit 1; fi
           for t in test_real_voicevox_narrates_japanese test_real_voicevox_speakers_and_terms test_real_voicevox_describes_a_video test_real_voicevox_reads_the_dictionary_terms test_real_voicevox_same_profile_same_audio; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done

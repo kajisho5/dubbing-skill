@@ -91,7 +91,7 @@ jobs:
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           /usr/bin/time -v -o time.log python -m unittest discover -s tests -p test_qwen3_tts.py -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log
+          if grep -E "\.\.\. skipped" test.log; then echo "::error::a test skipped"; exit 1; fi
           grep -E "^test_real_qwen3_tts_narrates_english .*\.\.\. ok$" test.log || { echo "::error::test_real_qwen3_tts_narrates_english did not run and pass"; exit 1; }
           { echo "### Real Qwen3-TTS 0.6B Base on CPU (NARRATE, one English sentence, a synthetic reference voice, seed 0 twice)"; echo;
             echo "| model | lang | chars | clip s | wall s (run 1 / run 2, model load included) | wall / clip | same seed, same audio |";

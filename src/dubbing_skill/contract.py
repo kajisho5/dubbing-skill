@@ -102,7 +102,7 @@ _OP_TOOLS = {
                            "the engine's built-in voice (voicevox: a style id, default 3), or a reference voice (--reference, "
                            "chatterbox, qwen3_tts) with its owner's consent record (--consent, CONSENT_RECORD, ADR-009); "
                            "qwen3_tts has no built-in voice"],
-                "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox|voicevox]",
+                "argv": ["narrate", "<cues.json|cues.srt|cues.vtt|text.txt>", "--lang <ja>", "-o <out.wav>", "[--engine chatterbox|voicevox|kokoro|style_bert_vits2|qwen3_tts]",
                          "[--voice <id>]", "[--reference <voice.wav> --consent <consent.json>]", "[--accept-unverified-voice-terms]", "[--profile <profile.json>]", "[--pronunciation <dict.json>]", "[--translation-note <json>]", "[--seed 0]",
                          "[--on-overflow fail|shift]",
                          "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
@@ -127,7 +127,7 @@ _OP_TOOLS = {
                        "speaker (--speaker-reference SPEAKER=PATH, else --reference) with its owner's consent record "
                        "(--speaker-consent / --consent, CONSENT_RECORD, ADR-009)"],
             "argv": ["dub", "<video|audio>", "<cues.json|cues.srt|cues.vtt>", "--lang <en>", "-o <out.mp4|out.mov|out.mkv|out.wav>",
-                     "[--source-cues <src.srt>]", "[--engine chatterbox]", "[--voice <id>]", "[--speaker-voice <speaker>=<id>]...",
+                     "[--source-cues <src.srt>]", "[--engine chatterbox|style_bert_vits2|qwen3_tts]", "[--voice <id>]", "[--speaker-voice <speaker>=<id>]...",
                      "[--reference <voice.wav> --consent <consent.json>]", "[--speaker-reference <speaker>=<voice.wav>]...",
                      "[--speaker-consent <speaker>=<consent.json>]...",
                      "[--audio-stream 0]", f"[--max-overrun {DEFAULT_MAX_OVERRUN:g}]", "[--on-unfit fail|keep]",

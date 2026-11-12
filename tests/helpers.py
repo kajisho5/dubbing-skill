@@ -105,7 +105,7 @@ def no_engines_env(hf_cache: str) -> Dict[str, Optional[str]]:
     return {"DUBBING_VOICEVOX_URL": closed_port_url(), "DUBBING_SBV2_URL": closed_port_url(),
             "DUBBING_CHATTERBOX_PYTHON": None, "DUBBING_KOKORO_PYTHON": None, "DUBBING_QWEN3_TTS_PYTHON": None,
             "DUBBING_CHATTERBOX_MODEL_DIR": None, "DUBBING_KOKORO_MODEL_DIR": None, "DUBBING_QWEN3_TTS_MODEL_DIR": None,
-            "DUBBING_QWEN3_TTS_MODEL": None,
+            "DUBBING_QWEN3_TTS_MODEL": None, "DUBBING_QWEN3_TTS_DEVICE": None,
             "HF_HUB_CACHE": hf_cache, "HF_HOME": hf_cache, "XDG_CACHE_HOME": hf_cache}
 
 
@@ -880,7 +880,7 @@ def kokoro_ready(tmp: str, **fake: Any) -> Iterator[str]:
 # directory with the Hugging Face libraries offline, and only a local reference file. A line lasts QWEN_BASE +
 # QWEN_PER_CHAR * len(text) seconds at 24 kHz; its pitch follows the seed, so a seed that does not arrive shows. Calls
 # go to calls.json. Modes (DUBBING_FAKE_QWEN3_TTS_MODE, read in the worker): tone, fail (generate raises), empty (a clip
-# with no samples).
+# with no samples), cap (a clip of max_new_tokens frames: the line ran out of frames).
 QWEN_BASE, QWEN_PER_CHAR, QWEN_RATE = 0.2, 0.07, 24000
 FAKE_QWEN_TTS = r"""
 import json, math, os
@@ -945,6 +945,8 @@ class Qwen3TTSModel:
             raise RuntimeError("fake qwen-tts failed")
         if MODE == "empty":
             return [_Array([])], __RATE__
+        if MODE == "cap":                   # the line ran out of codec frames: max_new_tokens frames of 1920 samples
+            return [_Array([0.0] * (kwargs["max_new_tokens"] * 1920))], __RATE__
         n = int(round((__BASE__ + __PER_CHAR__ * len(text)) * __RATE__))
         freq = 200.0 + (torch.SEED or 0) % 50
         return [_Array([0.2 * math.sin(2 * math.pi * freq * i / __RATE__) for i in range(n)])], __RATE__

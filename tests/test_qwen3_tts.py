@@ -196,14 +196,20 @@ class LookupTests(unittest.TestCase):
         self.assertEqual((r["status"], r["revision"]), ("OK", None))              # the user's own directory: no revision
 
 
-@unittest.skipIf(NEW_PYTHON, "this interpreter is Python >= 3.10; the refusal on 3.9 is checked in the 3.9 jobs")
-class OnOldPythonTests(Qwen3TtsBase):
-    def test_python_3_9_is_refused_before_any_work(self):
-        with qwen3_tts_ready(self.tmp.name) as site, self.assertRaises(DubbingError) as e:
-            self.narrate()
+class PythonGateTests(Qwen3TtsBase):
+    def test_the_interpreter_python_gate(self):
+        # on 3.9 (the 3.9 unit jobs) the op is refused before any work; on 3.10+ the gate lets the engine through
+        with qwen3_tts_ready(self.tmp.name) as site:
+            report = get_engine("qwen3_tts").inspect()
+            if NEW_PYTHON:
+                self.assertEqual(report["status"], "OK", report)
+                return
+            with self.assertRaises(DubbingError) as e:
+                self.narrate()
+            calls = fake_chatterbox_calls(site)
         self.assertEqual((e.exception.code, e.exception.details["status"]), ("ENGINE_UNAVAILABLE", "INCOMPATIBLE"))
         self.assertIn("Python >= 3.10", e.exception.message)
-        self.assertEqual(fake_chatterbox_calls(site), [])
+        self.assertEqual(calls, [])
 
 
 @unittest.skipUnless(NEW_PYTHON, "qwen-tts needs Python >= 3.10 (the fake runs under this interpreter)")
@@ -321,10 +327,13 @@ class NarrateTests(Qwen3TtsBase):
         self.assertFalse(os.path.exists(self.out))
 
     def test_runtime_failures_leave_nothing(self):
-        for mode, code in (("fail", "ENGINE_FAILED"), ("empty", "INVALID_RESULT")):
+        for mode, code in (("fail", "ENGINE_FAILED"), ("empty", "INVALID_RESULT"), ("cap", "INVALID_RESULT")):
             with qwen3_tts_ready(self.tmp.name, mode=mode), self.assertRaises(DubbingError, msg=mode) as e:
                 self.narrate()
             self.assertEqual(e.exception.code, code, mode)
+            if mode == "cap":                                   # a clip that ran out of frames is never returned cut
+                self.assertEqual(e.exception.details["max_new_tokens"], MAX_NEW_TOKENS)
+                self.assertIn("cut short", e.exception.message)
             self.assertFalse(os.path.exists(self.out))
             self.assertEqual([p for p in os.listdir(self.tmp.name) if p.startswith(".dubbing-")], [])
 
