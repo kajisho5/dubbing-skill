@@ -4,10 +4,6 @@
 name: heavy tests
 on:
   workflow_dispatch:
-  # TEMPORARY, removed before merge: a dispatch needs the file on the default branch, so the first run on this
-  # branch is started by a push to it.
-  push:
-    branches: [claude/qwen3-tts-engine]
 permissions:
   contents: read
 concurrency:
