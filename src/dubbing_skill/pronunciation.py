@@ -333,8 +333,70 @@ def prepare(path: Optional[str], engine: Any, lang: str, texts: Sequence[str]) -
     return Prepared(dictionary, method, spoken, params, lines)
 
 
-def terms_report(script_path: str, dictionary_path: str, lang: str) -> Dict[str, Any]:
-    """`dubbing terms`: which dictionary terms each line of the script contains. No engine, no media."""
+TRANSCRIPT_SCHEMA_PREFIX = "transcription-skill/transcript/"
+_TRANSCRIPT_DROP = re.compile(r"[\s、。，．,.？?！!・「」『』（）()\"'“”‘’…]+")
+HEARD_METHOD = ("the transcript's segment text, NFKC, without spaces and punctuation, searched for each term as written "
+                "and for its reading (hiragana and katakana folded, long vowels spelled as they sound); a term is heard "
+                "when it is found at least as many times as the script contains it")
+HEARD_LIMIT = ("a transcript is written text: a term heard as written means the recogniser wrote that word, which it "
+               "can also do from another reading of it; compare with a run without the dictionary (a control) to see "
+               "that the check tells the readings apart on this recogniser")
+
+
+def _transcript_text(doc: Dict[str, Any]) -> str:
+    return "".join(str(seg.get("text") or "") for seg in doc.get("segments") or [] if isinstance(seg, dict))
+
+
+def _count(pattern: "re.Pattern[str]", text: str) -> int:
+    return len(pattern.findall(text)) if text else 0
+
+
+def heard_check(transcript_path: str, entries: Sequence[Entry], expected: Dict[str, int], lang: str) -> Dict[str, Any]:
+    """`dubbing terms --transcript`: whether a transcription-skill Transcript of the output contains each dictionary
+    term the script uses, as written or as its reading, as often as the script does (roadmap step 12)."""
+    src = os.path.abspath(transcript_path)
+    if not os.path.isfile(src):
+        raise DubbingError("INPUT_NOT_FOUND", f"{transcript_path} is not a file", {"input": transcript_path})
+    try:
+        with open(src, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise DubbingError("INVALID_ARGUMENT", f"{transcript_path} is not JSON: {e}", {"input": transcript_path})
+    if not (isinstance(doc, dict) and str(doc.get("schema", "")).startswith(TRANSCRIPT_SCHEMA_PREFIX)
+            and isinstance(doc.get("segments"), list)):
+        raise DubbingError("INVALID_ARGUMENT", f"{transcript_path} is not a transcription-skill Transcript "
+                           f"(schema {TRANSCRIPT_SCHEMA_PREFIX}*, with segments)", {"input": transcript_path})
+    raw = _transcript_text(doc)
+    text = _TRANSCRIPT_DROP.sub("", unicodedata.normalize("NFKC", raw))
+    sounds = phonetic_kana(text)
+    prov = doc.get("provenance") if isinstance(doc.get("provenance"), dict) else {}
+    terms, missing = [], []
+    for e in sorted((e for e in entries if expected.get(e.term)), key=lambda e: e.term):
+        want = expected[e.term]
+        written = _count(_pattern(unicodedata.normalize("NFKC", e.term)), text)
+        reading = phonetic_kana(_TRANSCRIPT_DROP.sub("", e.reading))
+        as_reading = sounds.count(reading) if reading else 0
+        heard = written + as_reading
+        status = "heard" if heard >= want else ("partly" if heard else "not_heard")
+        if status != "heard":
+            missing.append(e.term)
+        terms.append({"term": e.term, "reading": e.reading, "expected": want, "as_written": written,
+                      "as_reading": as_reading, "status": status})
+    warnings = []
+    t_lang = doc.get("language")
+    if isinstance(t_lang, str) and t_lang not in ("unknown", "") and not lang_matches(t_lang, lang) \
+            and not lang_matches(lang, t_lang):
+        warnings.append(f"the transcript's language is {t_lang}, the script's {lang}")
+    return {"transcript": {"path": src, "sha256": sha256_file(src), "engine": doc.get("engine") or prov.get("engine"),
+                           "model": prov.get("model"), "language": t_lang, "text": raw},
+            "terms": terms, "method": HEARD_METHOD, "limit": HEARD_LIMIT, "warnings": warnings,
+            "summary": {"terms": len(terms), "heard": len(terms) - len(missing), "not_heard": missing,
+                        "all_heard": not missing}}
+
+
+def terms_report(script_path: str, dictionary_path: str, lang: str, transcript_path: Optional[str] = None) -> Dict[str, Any]:
+    """`dubbing terms`: which dictionary terms each line of the script contains, and with `transcript_path` whether a
+    transcript of the output contains them. No engine, no media."""
     from .cues import parse_script
     if not isinstance(lang, str) or not lang.strip():
         raise DubbingError("INVALID_ARGUMENT", "--lang is required (the language the script is in)", {})
@@ -344,12 +406,14 @@ def terms_report(script_path: str, dictionary_path: str, lang: str) -> Dict[str,
     script = parse_script(src, lang)
     dictionary = load_dictionary(dictionary_path)
     entries = entries_for(dictionary, lang)
-    lines, used = [], set()
+    lines, used, counts = [], set(), {}  # type: ignore[var-annotated]
     for line in script.lines:
         found = line_terms(line.text, entries)
         used.update(t["term"] for t in found)
+        for t in found:
+            counts[t["term"]] = counts.get(t["term"], 0) + 1
         lines.append({"index": line.index, "start": line.start, "end": line.end, "terms": found})
-    return {"schema": TERMS_SCHEMA, "ok": True, "op": "terms", "skill": {"id": SKILL_ID, "version": __version__},
+    doc = {"schema": TERMS_SCHEMA, "ok": True, "op": "terms", "skill": {"id": SKILL_ID, "version": __version__},
             "input": {"path": src, "lines": len(script.lines), "lang": lang, "format": script.source_format},
             "dictionary": dict(dictionary.summary(), entries_for_lang=len(entries),
                                other_langs=sorted({e.lang for e in dictionary.entries if not lang_matches(e.lang, lang)})),
@@ -358,3 +422,10 @@ def terms_report(script_path: str, dictionary_path: str, lang: str) -> Dict[str,
                         "terms_found": sorted(used), "terms_unused": sorted(e.term for e in entries if e.term not in used)},
             # transcription-skill's --vocabulary ({written form: [readings]}), to check the output against the dictionary
             "transcription_vocabulary": {e.term: [e.reading] for e in entries}}
+    if transcript_path:
+        check = heard_check(transcript_path, entries, counts, lang)
+        doc["heard"] = check
+        doc["warnings"] = check["warnings"] + ([f"{len(check['summary']['not_heard'])} dictionary term(s) were not found in "
+                                                f"the transcript as written or as read: {check['summary']['not_heard']}"]
+                                               if check["summary"]["not_heard"] else [])
+    return doc

@@ -251,6 +251,40 @@ jobs:
           { echo "### Real VOICEVOX 0.26.0 on CPU (NARRATE, text mode, default voice)"; echo;
             echo "| lang | lines | timeline s | expected s | wall s | clips s | credit |"; echo "|---|---|---|---|---|---|---|";
             cat "$DUBBING_MEASURE_LOG"; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        with:
+          repository: kajisho5/transcription-skill
+          path: vendor/transcription-skill
+      - name: transcription-skill with faster-whisper in its own virtual environment (a small model, CI only)
+        run: |
+          set -eu
+          python -m venv "$RUNNER_TEMP/transcription"
+          tr="$RUNNER_TEMP/transcription/bin"
+          "$tr/python" -m pip install --upgrade pip
+          "$tr/python" -m pip install "./vendor/transcription-skill[faster-whisper]"
+          "$tr/python" -m pip list | grep -i -E "^(transcription-skill|faster-whisper|ctranslate2) "
+          for m in $WHISPER_MODELS; do "$tr/transcription" models pull "$m"; done
+          echo "TRANSCRIPTION=$tr/transcription" >> "$GITHUB_ENV"
+        env:
+          WHISPER_MODELS: base small
+      - name: The three medical terms, checked by transcription-skill on the output (roadmap step 12, ADR-015)
+        # NARRATE the fixture with the dictionary, and once without it as a control, through the real VOICEVOX; each
+        # output is transcribed by transcription-skill (faster-whisper, no prompt, no vocabulary: nothing tells the
+        # recogniser the terms) and `dubbing terms --transcript` looks for each term as written or as its reading.
+        run: |
+          set -eu
+          fx=tests/fixtures/pronunciation
+          dubbing narrate "$fx/medical_ja.txt" -o with.wav --lang ja --engine voicevox --pronunciation "$fx/medical_ja.json" --ffmpeg-skill vendor/ffmpeg-skill --json > with.json
+          dubbing narrate "$fx/medical_ja.txt" -o without.wav --lang ja --engine voicevox --ffmpeg-skill vendor/ffmpeg-skill --json > without.json
+          { echo "### Pronunciation dictionary checked by transcription-skill (real VOICEVOX 0.26.0, faster-whisper, no prompt)"; echo;
+            echo "| model | run | heard | not heard | transcript |"; echo "|---|---|---|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+          for m in base small; do
+            for run in with without; do
+              "$TRANSCRIPTION" transcribe "$run.wav" --language ja --model "$m" --no-cache --json -o "$run.$m.transcript.json" > /dev/null
+              dubbing terms "$fx/medical_ja.txt" --pronunciation "$fx/medical_ja.json" --lang ja --transcript "$run.$m.transcript.json" --json > "$run.$m.terms.json" || true
+              python -c "import json,sys; h=json.load(open('$run.$m.terms.json', encoding='utf-8'))['heard']; print('| $m | $run | %d of %d | %s | %s |' % (h['summary']['heard'], h['summary']['terms'], ', '.join(h['summary']['not_heard']) or '-', h['transcript']['text']))" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          done
       - name: Engine log
         if: always()
         run: docker logs voicevox 2>&1 | tail -n 60 || true

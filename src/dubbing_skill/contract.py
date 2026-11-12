@@ -222,10 +222,12 @@ def tools() -> list:
         {"tool_id": f"{SKILL_ID}/terms", "role": "analysis", "writes_media": False, "mutates_input": False, "deterministic": True,
          "implemented": True, "roadmap_step": 12,
          "description": "Which pronunciation dictionary terms each line of a script contains (ADR-015), with the dictionary's "
-                        "terms the script never uses and the dictionary as transcription-skill's --vocabulary; no engine, "
+                        "terms the script never uses and the dictionary as transcription-skill's --vocabulary; with "
+                        "--transcript, whether a transcription-skill Transcript of the output contains each term as "
+                        "written or as its reading (heard); no engine, "
                         "no media",
          "inputs": ["cues (CUES_INPUT) or plain text", "a pronunciation dictionary (PRONUNCIATION_INPUT)"],
-         "argv": ["terms", "<cues.json|cues.srt|cues.vtt|text.txt>", "--pronunciation <dict.json>", "--lang <ja>", "--json"],
+         "argv": ["terms", "<cues.json|cues.srt|cues.vtt|text.txt>", "--pronunciation <dict.json>", "--lang <ja>", "[--transcript <transcript.json>]", "--json"],
          "schema": TERMS_SCHEMA},
         {"tool_id": f"{SKILL_ID}/watermark", "role": "analysis", "writes_media": False, "mutates_input": False,
          "deterministic": True, "implemented": True, "roadmap_step": 14,

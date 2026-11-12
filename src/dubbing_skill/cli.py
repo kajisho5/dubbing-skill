@@ -173,6 +173,8 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("script", help="cues (.json, .srt, .vtt) or plain text (.txt)")
     t.add_argument("--pronunciation", required=True, help="the dictionary (dubbing/pronunciation@1 JSON, ADR-015)")
     t.add_argument("--lang", required=True, help="the language the script is in; only entries for it are used")
+    t.add_argument("--transcript", help="a transcription-skill Transcript of the output: is each term in it, as written "
+                                        "or as its reading? (heard)")
     t.add_argument("--json", action="store_true")
     w = sub.add_parser("watermark", help="read an engine's watermark back from any media file (a deliverable after mixing)")
     w.add_argument("media", help="a video or audio file; its first audio stream is checked")
@@ -288,6 +290,10 @@ def _human(doc: Dict[str, Any]) -> None:
         for ln in doc["lines"]:
             if ln["terms"]:
                 print(f"  line {ln['index']}: " + ", ".join(f"{t['term']} -> {t['reading']}" for t in ln["terms"]))
+        if doc.get("heard"):
+            h = doc["heard"]
+            print(f"  transcript: {h['summary']['heard']} of {h['summary']['terms']} term(s) heard; "
+                  f"not heard: {h['summary']['not_heard']}")
     elif doc.get("op") == "fit":
         sm = doc["summary"]
         print(f"{doc['input']['cues']}: {sm['lines']} line(s): {sm['fit']} fit, {sm['tempo']} sped up "
@@ -377,7 +383,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _emit(check_watermark(args.media, args.engine, args.ffmpeg_skill, args.timeout), as_json)
             return 0
         if args.cmd == "terms":
-            _emit(terms_report(args.script, args.pronunciation, args.lang), as_json)
+            _emit(terms_report(args.script, args.pronunciation, args.lang, args.transcript), as_json)
             return 0
         if args.cmd == "fit":
             _emit(fit(FitRequest(cues_path=args.cues, clip_paths=list(args.clips), lang=args.lang, max_tempo=args.max_tempo,

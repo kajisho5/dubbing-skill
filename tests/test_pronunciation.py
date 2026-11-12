@@ -148,6 +148,62 @@ class TermsCommandTests(unittest.TestCase):
         self.assertEqual((rc, doc["error"]["code"]), (2, "INVALID_ARGUMENT"))
 
 
+def transcript(tmp, *texts, language="ja", schema="transcription-skill/transcript/0.1"):
+    """A transcription-skill Transcript with one segment per text (only the fields the check reads)."""
+    segs = [{"id": f"s{k}", "start": float(k), "end": k + 1.0, "text": t, "raw_text": t, "confidence": 0.9, "words": None,
+             "speaker_id": None} for k, t in enumerate(texts)]
+    return write(os.path.join(tmp, "t.json"), json.dumps({"schema": schema, "language": language, "segments": segs,
+                                                          "engine": "faster_whisper",
+                                                          "provenance": {"engine": "faster_whisper", "model": "base"}},
+                                                         ensure_ascii=False))
+
+
+class TranscriptCheckTests(unittest.TestCase):
+    """`dubbing terms --transcript`: is each dictionary term the script uses in a transcript of the output, as written
+    or as its reading, as often as the script uses it (roadmap step 12)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def check(self, *texts, **kw):
+        rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", MEDICAL, "--lang", "ja", "--transcript",
+                          transcript(self.tmp.name, *texts, **kw), "--json")
+        self.assertEqual(rc, 0, doc)
+        return doc
+
+    def test_every_term_heard_as_written_or_as_its_reading(self):
+        doc = self.check("口腔内を観察し、腹腔鏡で確認します。", "湿布は一日一回、背中にちょうふしてください。", "コークウケアは毎食後に行います。")
+        h = doc["heard"]
+        self.assertEqual({t["term"]: (t["expected"], t["as_written"], t["as_reading"], t["status"]) for t in h["terms"]},
+                         {"口腔": (2, 1, 1, "heard"), "腹腔": (1, 1, 0, "heard"), "貼付": (1, 0, 1, "heard")})
+        self.assertEqual(h["summary"], {"terms": 3, "heard": 3, "not_heard": [], "all_heard": True})
+        self.assertEqual((h["transcript"]["engine"], h["transcript"]["model"]), ("faster_whisper", "base"))
+        self.assertEqual(doc["warnings"], [])
+
+    def test_another_reading_is_not_heard(self):
+        # the everyday readings: こうこう (written 高校), ふっこう (復興), てんぷ (添付)
+        doc = self.check("高校内を観察し、復興鏡で確認します。", "湿布は一日一回、背中に添付してください。", "口腔ケアは毎食後に行います。")
+        h = doc["heard"]
+        self.assertEqual({t["term"]: t["status"] for t in h["terms"]}, {"口腔": "partly", "腹腔": "not_heard", "貼付": "not_heard"})
+        self.assertEqual((h["summary"]["all_heard"], h["summary"]["not_heard"]), (False, ["口腔", "腹腔", "貼付"]))
+        self.assertTrue(any("not found in the transcript" in w for w in doc["warnings"]), doc["warnings"])
+        self.assertNotIn("コウクウ", phonetic_kana("こうこう"))
+
+    def test_a_transcript_in_another_language_is_warned_about(self):
+        doc = self.check("口腔 腹腔 貼付 口腔", language="en")
+        self.assertTrue(doc["heard"]["summary"]["all_heard"])
+        self.assertIn("the transcript's language is en, the script's ja", doc["warnings"])
+
+    def test_not_a_transcript_is_refused(self):
+        rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", MEDICAL, "--lang", "ja", "--transcript",
+                          transcript(self.tmp.name, "x", schema="subtitle-skill/cues@1"), "--json")
+        self.assertEqual((rc, doc["error"]["code"]), (2, "INVALID_ARGUMENT"))
+        rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", MEDICAL, "--lang", "ja", "--transcript",
+                          os.path.join(self.tmp.name, "none.json"), "--json")
+        self.assertEqual((rc, doc["error"]["code"]), (2, "INPUT_NOT_FOUND"))
+
+
 class VoicevoxDictionaryTests(unittest.TestCase):
     """NARRATE with VOICEVOX and the medical fixture: each term goes into the app's user dictionary for the run, is
     read as the dictionary says (the engine's own reading, `kana`, contains it), and is removed again."""
