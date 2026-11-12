@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dubbing-skill"
-version = "0.2.0"
+version = "0.2.1"
 description = "AI narration (TTS), voice replacement (dubbing) and audio description timed to the picture: local engines behind availability checks; media work through ffmpeg-skill."
 readme = "README.md"
 license = {text = "MIT"}
@@ -14,6 +14,10 @@ keywords = ["tts", "dubbing", "narration", "audio-description", "chatterbox", "v
 # stdlib only. Engines are not extras on purpose (ADR-001, ADR-002): each is installed in its own environment or run
 # as its own app, and found by doctor.
 dependencies = []
+
+[project.optional-dependencies]
+# Not an engine: the Japanese reading dictionary `dubbing terms --transcript` reads homophones with (ADR-015; Apache-2.0)
+readings = ["sudachipy>=0.6.8", "sudachidict_core>=20230927"]
 
 [project.scripts]
 dubbing = "dubbing_skill.cli:main"

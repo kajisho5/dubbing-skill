@@ -8,11 +8,13 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from helpers import (FAKE_RATE, ROOT, WaveSkill, chatterbox_ready, env, fake_chatterbox_calls, fake_voicevox, no_engines_env,
                      run_cli, write_tone_wav)
 
+from dubbing_skill import pronunciation as pron
 from dubbing_skill.contract import contract
 from dubbing_skill.dub import DubRequest, dub
 from dubbing_skill.engines import get_engine
@@ -146,6 +148,109 @@ class TermsCommandTests(unittest.TestCase):
             bad = write(os.path.join(tmp, "d.json"), json.dumps({"schema": PRONUNCIATION_SCHEMA, "entries": [{"term": "x"}]}))
             rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", bad, "--lang", "ja", "--json")
         self.assertEqual((rc, doc["error"]["code"]), (2, "INVALID_ARGUMENT"))
+
+
+def transcript(tmp, *texts, language="ja", schema="transcription-skill/transcript/0.1"):
+    """A transcription-skill Transcript with one segment per text (only the fields the check reads)."""
+    segs = [{"id": f"s{k}", "start": float(k), "end": k + 1.0, "text": t, "raw_text": t, "confidence": 0.9, "words": None,
+             "speaker_id": None} for k, t in enumerate(texts)]
+    return write(os.path.join(tmp, "t.json"), json.dumps({"schema": schema, "language": language, "segments": segs,
+                                                          "engine": "faster_whisper",
+                                                          "provenance": {"engine": "faster_whisper", "model": "base"}},
+                                                         ensure_ascii=False))
+
+
+# what SudachiDict core gives these surfaces (looked up with SudachiPy 0.7.0, SudachiDict core 20261015)
+SUDACHI = {"航空": {"コウクウ"}, "福": {"フク"}, "空": {"ウツロ", "ウロ", "カラ", "クウ", "ソラ", "ゾラ", "ムナシ"},
+           "調": {"シラベ", "チョウ", "ツキ"}, "付": {"ツキ", "ツケ", "ツケタリ", "ヅキ", "ヅケ", "フ"}, "高校": {"コウコウ"},
+           "復興": {"フッコウ"}, "調布": {"チョウフ"}, "重複": {"ジュウフク", "チョウフク"}, "口腔": {"クチムロ", "コウクウ", "コウコウ"},
+           "腹腔": {"フククウ", "フッコウ"}, "貼付": {"チョウフ", "テンプ"}, "鏡": {"カガミ", "キョウ"}, "教": {"オシエ", "キョウ"},
+           "腔": {"クウ", "コウ"}, "高": {"コウ", "タカ"}, "校": {"コウ"}, "復": {"フク"}, "興": {"コウ", "キョウ"}, "重": {"ジュウ", "チョウ", "オモ"},
+           "複": {"フク"}}
+
+
+class TranscriptCheckTests(unittest.TestCase):
+    """`dubbing terms --transcript`: is each dictionary term the script uses read as the dictionary says in a
+    transcript of the output, as often as the script uses it (roadmap step 12). The Japanese reading dictionary is a
+    table of what SudachiDict gives (no package needed); the transcripts are those faster-whisper base wrote for the real
+    VOICEVOX narration in CI, with and without the dictionary."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        pron._LOOKUP = lambda surface: frozenset(SUDACHI.get(surface, ()))
+        self.addCleanup(setattr, pron, "_LOOKUP", None)
+
+    def check(self, *texts, **kw):
+        rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", MEDICAL, "--lang", "ja", "--transcript",
+                          transcript(self.tmp.name, *texts, **kw), "--json")
+        self.assertEqual(rc, 0, doc)
+        return doc
+
+    def statuses(self, doc):
+        return {t["term"]: t["status"] for t in doc["heard"]["terms"]}
+
+    def test_with_the_dictionary_every_term_is_heard_through_its_homophones(self):
+        doc = self.check("航空内を観察し、福空教で確認します。", "シットは1日1回、背中に調付してください。", "航空ケアは毎食後に行います。")
+        h = doc["heard"]
+        self.assertEqual({t["term"]: (t["expected"], t["as_homophone"], t["status"]) for t in h["terms"]},
+                         {"口腔": (2, ["航空", "航空"], "heard"), "腹腔": (1, ["福空"], "heard"), "貼付": (1, ["調付"], "heard")})
+        self.assertEqual(h["summary"], {"terms": 3, "heard": 3, "written_only": [], "not_heard": [], "all_heard": True})
+        self.assertEqual((h["transcript"]["engine"], h["transcript"]["model"], h["readings"]["homophones"]),
+                         ("faster_whisper", "base", True))
+        self.assertEqual(doc["warnings"], [])
+
+    def test_without_it_the_everyday_readings_are_not_heard(self):
+        # VOICEVOX's own readings: 高校 (コウコウ), 復興 (フッコウ); its 貼付 is already チョウフ (調布)
+        doc = self.check("高校内を観察し、復興教で確認します。", "シットは1日1回、背中に調布してください。", "高校経は毎食後に行います。")
+        self.assertEqual(self.statuses(doc), {"口腔": "not_heard", "腹腔": "not_heard", "貼付": "heard"})
+        self.assertEqual(doc["heard"]["summary"]["not_heard"], ["口腔", "腹腔"])
+        self.assertTrue(any("not heard as the dictionary reads them" in w for w in doc["warnings"]), doc["warnings"])
+
+    def test_a_reading_must_cover_whole_characters(self):
+        # 重複 reads チョウフク: チョウフ is only a prefix of it, so 貼付 is not heard
+        doc = self.check("口腔内を観察し、腹腔鏡で確認します。", "背中に重複してください。", "こうくうケアは毎食後に行います。")
+        self.assertEqual(self.statuses(doc), {"口腔": "written", "腹腔": "written", "貼付": "not_heard"})
+        h = {t["term"]: t for t in doc["heard"]["terms"]}
+        self.assertEqual((h["口腔"]["as_kana"], h["口腔"]["as_written"], h["口腔"]["as_homophone"]), (1, 1, []))
+        self.assertEqual(doc["heard"]["summary"]["written_only"], ["口腔", "腹腔"])
+        self.assertTrue(any("only as written" in w for w in doc["warnings"]), doc["warnings"])
+
+    def test_kana_inside_a_longer_word_is_not_the_reading(self):
+        # the tokenizer's words: チョウフク is one word, so its first four kana are not チョウフ; チョウフ|シテ is two
+        pron._BOUNDARIES = lambda text: {0, len(text)} | {m.end() for m in __import__("re").finditer("チョウフク|チョウフ|背中に|コウクウ", text)} \
+            | {m.start() for m in __import__("re").finditer("チョウフク|チョウフ|コウクウ", text)}
+        self.addCleanup(setattr, pron, "_BOUNDARIES", None)
+        doc = self.check("口腔内を観察し、腹腔鏡で確認します。", "背中にチョウフクしてください。", "コウクウケア。")
+        h = {t["term"]: t for t in doc["heard"]["terms"]}
+        self.assertEqual((h["貼付"]["as_kana"], h["貼付"]["status"]), (0, "not_heard"))
+        doc = self.check("口腔内を観察し、腹腔鏡で確認します。", "背中にチョウフしてください。", "コウクウケア。")
+        h = {t["term"]: t for t in doc["heard"]["terms"]}
+        self.assertEqual((h["貼付"]["as_kana"], h["口腔"]["as_kana"], h["口腔"]["status"]), (1, 1, "written"))
+
+    def test_kana_is_read_as_itself(self):
+        doc = self.check("こーくうないを観察し、ふくくうきょうで確認します。", "背中にチョウフしてください。", "コウクウケア。")
+        self.assertEqual(self.statuses(doc), {"口腔": "heard", "腹腔": "heard", "貼付": "heard"})
+
+    def test_without_a_reading_dictionary_it_says_so(self):
+        pron._LOOKUP = None
+        with mock.patch.object(pron, "reading_lookup", return_value=None):
+            doc = self.check("航空内を観察し、福空教で確認します。", "背中に調付してください。", "航空ケア。")
+        self.assertEqual(doc["heard"]["readings"]["homophones"], False)
+        self.assertEqual(doc["heard"]["summary"]["not_heard"], ["口腔", "腹腔", "貼付"])
+        self.assertTrue(any("sudachipy" in w for w in doc["warnings"]), doc["warnings"])
+
+    def test_a_transcript_in_another_language_is_warned_about(self):
+        doc = self.check("口腔 腹腔 貼付 口腔", language="en")
+        self.assertIn("the transcript's language is en, the script's ja", doc["warnings"])
+
+    def test_not_a_transcript_is_refused(self):
+        rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", MEDICAL, "--lang", "ja", "--transcript",
+                          transcript(self.tmp.name, "x", schema="subtitle-skill/cues@1"), "--json")
+        self.assertEqual((rc, doc["error"]["code"]), (2, "INVALID_ARGUMENT"))
+        rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", MEDICAL, "--lang", "ja", "--transcript",
+                          os.path.join(self.tmp.name, "none.json"), "--json")
+        self.assertEqual((rc, doc["error"]["code"]), (2, "INPUT_NOT_FOUND"))
 
 
 class VoicevoxDictionaryTests(unittest.TestCase):

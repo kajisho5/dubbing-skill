@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - unreleased
+
+The pronunciation dictionary checked by transcription-skill on the output (roadmap step 12, ADR-015).
+
+- `dubbing terms <script> --pronunciation <dict.json> --lang <lang> --transcript <transcript.json>`: checks transcription-skill's Transcript of the output. `heard` gives, for each dictionary term the script uses, how often the transcript has its reading, against how often the script uses the term. The reading counts as kana, or as a homophone: another written form whose characters read as the reading, such as 航空 for コウクウ. The term itself written back is counted apart (`written`), because it does not show which reading was spoken. `summary.not_heard` and `summary.written_only` are also warned about. Additive: `[--transcript <transcript.json>]` on the `dubbing/terms` tool.
+- Homophones are read with SudachiPy and SudachiDict core (Apache-2.0), the optional extra `readings`. This extra is the package's first, and it is not an engine. Without it the result and a warning say homophones were not read.
+- CI (`voicevox` job): the three-term medical fixture is narrated through the real VOICEVOX twice, once with the dictionary and once without it as a control. transcription-skill transcribes both outputs with faster-whisper base and small, with no prompt. A term counts as heard when either model hears it. The run with the dictionary must have every term heard. In the control, neither model may hear 口腔 or 腹腔.
+
 ## 0.2.0 - unreleased
 
 Qwen3-TTS, an optional and experimental engine (ADR-018).

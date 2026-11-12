@@ -697,11 +697,39 @@ Roadmap step 12: a per-project dictionary (term, reading, accent where the engin
 ### Done when, checked
 
 - **Met, through the engine's own reading**: on the fixture `tests/fixtures/pronunciation/medical_ja.{json,txt}` (口腔 → コウクウ, 腹腔 → フククウ, 貼付 → チョウフ, three lines, four occurrences) the real VOICEVOX 0.26.0 in the `voicevox` CI job reads every occurrence as the dictionary says, and its user dictionary holds none of the words afterwards (`test_real_voicevox_reads_the_dictionary_terms`). On the fake app the same run checks the request shapes, the accents and the clean-up.
-- **Not met: the check by transcription-skill on the output.** It needs a speech-recognition model in CI (none is installed here, and the skill never downloads), and its output is written text: 口腔 read as こうこう or as コウクウ both come back as 口腔, so a transcript cannot tell the two readings apart for these terms. What reaches transcription-skill today is `dubbing terms`' `transcription_vocabulary`, for a reviewer's check.
+- **Met, checked by transcription-skill on the output** ([#21](https://github.com/kajisho5/dubbing-skill/pull/21)). In the `voicevox` CI job the fixture is narrated through the real VOICEVOX 0.26.0 with the dictionary, and once without it as a control. transcription-skill transcribes both outputs with two small Whisper models: faster-whisper 1.2.1 `base` and `small`, with `--language ja` and no prompt or vocabulary, so nothing tells the recogniser the terms. `dubbing terms --transcript` then checks each transcript. Measured in one run:
+
+  | run | VOICEVOX's own reading (AudioQuery kana) of 口腔 / 腹腔 / 貼付 | model | transcript | heard as the dictionary reads it | not heard |
+  |---|---|---|---|---|---|
+  | with the dictionary | コウクウ / フククウ / チョウフ | base | 航空内を観察し、福空教で確認します。シットは1日1回、背中に調付してください。航空ケアは毎食後に行います。 | 口腔 (航空 ×2), 腹腔 (福空), 貼付 (調付) | none |
+  | with the dictionary | | small | 航空内を観察し、福空鏡で確認しますシットは1日1回、背中に重複してください航空ケアは毎食後に行います | 口腔 (航空 ×2), 腹腔 (福空) | 貼付 (重複, チョウフク) |
+  | without (control) | コオコオ / フクコオ / チョオフ | base | 高校内を観察し、復興教で確認します。シットは1日1回、背中に調布してください。高校経は毎食後に行います。 | 貼付 (調布) | 口腔 (高校), 腹腔 (復興) |
+  | without (control) | | small | 高校内を観察し、福岡郷で確認しますシットは1日1回、背中に重複してください高校ケアは毎食後に行います | none | all three |
+
+  The recogniser never wrote the terms themselves. It wrote what it heard as other words with the same sound: 航空 for コウクウ, and 高校 for コウコウ. So the readings can be told apart after all.
+
+  On its own, VOICEVOX already reads 貼付 as チョウフ, so only 口腔 and 腹腔 tell the two runs apart.
+
+  A small model mishears some words, and differently from one CI machine to the next. In other runs `base` wrote 複雇共 for 腹腔 and 調布 for 貼付; the audio was the same, and VOICEVOX is deterministic (ADR-016). So in CI a term counts as heard when either model heard it.
+
+  CI asserts two things:
+  - With the dictionary, all three terms are heard.
+  - In the control, neither model hears 口腔 or 腹腔.
+
+### The transcript check (`dubbing terms --transcript`)
+
+- **Input**: a transcription-skill Transcript (`transcription-skill/transcript/*`) of the output. The segment text is joined, NFKC-normalised, and stripped of spaces and punctuation.
+- **Per term the script uses**, counted against how often the script uses it:
+  - `as_kana`: the reading in kana. Hiragana and katakana are folded, and long vowels are spelled as they sound (the folding `confirmed` uses). With the reading dictionary, the kana must start and end on word boundaries from its tokenizer, so チョウフ inside チョウフク does not count.
+  - `as_homophone`: another written form whose characters read as the reading. Every run of up to six characters takes any reading the Japanese dictionary gives it (SudachiPy with SudachiDict core, Apache-2.0), and kana reads as itself. The joined readings must spell the reading exactly, over whole characters, so 重複 (チョウフク) is not チョウフ.
+  - `as_written`: the term itself written back. This cannot show the reading: SudachiDict gives 口腔 both コウクウ and コウコウ. A span that is the term itself is therefore never counted as a homophone.
+- **Status**: `heard` when kana plus homophones reach the script's count; `written` when only the term written back makes up the count; `partly` or `not_heard` otherwise. `summary.not_heard` and `summary.written_only` are warned about.
+- **The reading dictionary is optional**: `pip install "dubbing-skill[readings]"`. It is the package's first extra, and it is not an engine. Without it, homophones are not read, and the result and a warning say so. The check never sends anything anywhere, and it never prompts the recogniser.
+- **Limits**: the check is only as good as the recogniser and the reading dictionary. A term the recogniser turns into something unrelated is `not_heard` even when it was spoken right, so treat a miss as a reason to listen, not as proof. A term that only comes back as written (`written`) is unproven.
 
 ### Contract changes for video-production-agent
 
-Additive only: `inputs.pronunciation`, `[--pronunciation <dict.json>]` on narrate / dub / audio-description, the `dubbing/terms` tool, `engines.registered.*.pronunciation`, and `pronunciation` in each op result. `contract_version` stays 1.0.
+Additive only: `inputs.pronunciation`, `[--pronunciation <dict.json>]` on narrate / dub / audio-description, the `dubbing/terms` tool, `engines.registered.*.pronunciation`, and `pronunciation` in each op result. Then `[--transcript <transcript.json>]` on `dubbing/terms`, and `heard` in its result ([#21](https://github.com/kajisho5/dubbing-skill/pull/21)). `contract_version` stays 1.0.
 
 ## ADR-016 One voice per channel or series: a named voice profile, recorded in every receipt
 

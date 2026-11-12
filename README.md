@@ -18,7 +18,7 @@
 
 AI narration (TTS), voice replacement (dubbing) and audio description, timed to the picture, for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Every media step (probe, assembling clips, putting the voice into the video, loudness) goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.2.0, all three ops experimental.** `contract`, `doctor`, `engines`, `narrate`, `dub` ([ADR-008](docs/decisions.md)), `describe` ([ADR-010](docs/decisions.md)) and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). A reference voice needs its owner's consent record ([ADR-009](docs/decisions.md)). Qwen3-TTS is an optional, experimental engine for cloned voices, never a default ([ADR-018](docs/decisions.md)). See the [roadmap](ECOSYSTEM_ROADMAP.md).
+**Status: 0.2.1, all three ops experimental.** `contract`, `doctor`, `engines`, `narrate`, `dub` ([ADR-008](docs/decisions.md)), `describe` ([ADR-010](docs/decisions.md)) and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). A reference voice needs its owner's consent record ([ADR-009](docs/decisions.md)). Qwen3-TTS is an optional, experimental engine for cloned voices, never a default ([ADR-018](docs/decisions.md)). See the [roadmap](ECOSYSTEM_ROADMAP.md).
 
 | Op | Capability | Default engine | Lifecycle | Step |
 |---|---|---|---|---|
@@ -42,6 +42,7 @@ dubbing describe talk.mp4 desc.json --lang ja -o talk.ad.mp4 --detect-gaps --jso
 dubbing fit cues.json line0.wav line1.wav --json   # timing fit: the tempo and silence each line needs; lines that cannot fit
 dubbing fit ja.srt line0.wav line1.wav --lang ja --rate --json   # plus the voice's rate and a length budget per unfit line
 dubbing terms script.txt --pronunciation terms.json --lang ja --json   # the dictionary terms each line contains
+dubbing terms script.txt --pronunciation terms.json --lang ja --transcript narration.transcript.json --json   # heard in the output?
 dubbing watermark final.mp4 --json   # Chatterbox's Perth mark read back from a deliverable
 ```
 
@@ -113,6 +114,7 @@ a `dubbing/pronunciation@1` JSON file, and given to `narrate`, `dub` or `describ
 - `reading` is written in the language's own script, as the engine should say it (a respelling in English, katakana in Japanese). `accent` (the accent nucleus in morae, 0 = flat) is used only where the engine takes one, and `ipa` only where it takes phonemes.
 - Each engine takes it its own way: **VOICEVOX** through its user dictionary (each word added for the run and removed after it; the engine's own reading of each line is recorded and every term is checked against it), **Kokoro** as inline phonemes for English entries with `ipa`, and **Chatterbox** and **Style-Bert-VITS2** by reading the term's respelling. The cue text itself is never changed.
 - `dubbing terms script.txt --pronunciation terms.json --lang ja --json` lists the dictionary terms each line contains, the terms the script never uses, and the dictionary as transcription-skill's `--vocabulary`. Every op result carries the same per line in `pronunciation`.
+- With `--transcript <transcript.json>` (transcription-skill's Transcript of the output, transcribed without a prompt), `heard` says, for each term, how often the transcript has its reading, against how often the script uses the term. The reading counts as kana, or as another word with the same sound: 航空 for 口腔 read コウクウ, read with SudachiDict, after `pip install "dubbing-skill[readings]"`. `heard.summary.not_heard` lists the terms not heard. The term itself written back proves nothing about its reading and is listed apart (`written_only`). ADR-015 has the measured runs, with the dictionary and without it.
 
 ## Voice profile ([ADR-016](docs/decisions.md))
 
