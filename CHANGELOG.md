@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 - unreleased
+
+Qwen3-TTS, an optional and experimental engine (ADR-018).
+
+- `qwen3_tts`: Qwen3-TTS-12Hz Base through `qwen-tts` 0.1.1 in the worker, under its own interpreter (`DUBBING_QWEN3_TTS_PYTHON`, Python >= 3.10). It is not a pip extra, like the other engines. Code and weights Apache-2.0, ten languages including Japanese, 24 kHz, no watermark, no credit.
+  - `DUBBING_QWEN3_TTS_MODEL` picks the 1.7B checkpoint (the default) or the 0.6B one, each pinned to a Hugging Face revision. The checkpoint's `config.json` must be the 12 Hz Base model of that size.
+  - Missing weights are `MODEL_NOT_FOUND` with `details.download`, the `hf download <repo> --revision <rev>` line.
+- The Base checkpoints have no built-in voice: every line is cloned from `--reference` (the speaker embedding; no transcript needed) and needs the voice owner's consent record, checked in the op and again in the worker (ADR-009, unchanged). `--voice` is refused.
+- One speaker-embedding prompt per reference clip, `torch.manual_seed(--seed)` before each line, and at most 2048 codec frames (about 164 s) per line.
+- Experimental, never a default: a published human-preference ranking placed it low while the vendor's own metrics are strong, so judge it by listening. `EngineSpec.experimental` and `experimental_reason`, `engines.experimental` in the contract, a warning in every result that used it, and `engine.experimental` in the provenance.
+- Provenance: `engine.revision` (new, for every engine; null where none is reported), the model id, the licences, the clone mode, the dtype and the checkpoint's sampling settings.
+- Tests: a fake `qwen_tts` runtime through the real worker (`tests/test_qwen3_tts.py`). A manual `heavy tests` workflow (`.github/workflows/heavy-tests.yml`) runs the real 0.6B checkpoint on CPU for one English sentence in a synthetic reference voice.
+
 ## 0.1.0 - unreleased
 
 AI voice disclosure (roadmap step 14, ADR-017).

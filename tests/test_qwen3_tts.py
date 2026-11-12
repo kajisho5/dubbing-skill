@@ -48,6 +48,12 @@ def sha(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def own_home(path: str) -> dict:
+    """The user's home moved to `path`: the lookup also reads ~/.cache/huggingface/hub, where a machine (the heavy-tests
+    job, a developer's) may hold the real checkpoints, so a test that expects none must not see that cache."""
+    return {"HOME": path, "USERPROFILE": path}
+
+
 def pkgs(version="0.1.1", python="3.12.3", module=True):
     """A python_packages() answer for the qwen-tts lookup."""
     return {"python": python, "dists": {"qwen-tts": version}, "modules": {"qwen_tts": module}, "interpreter": "this Python",
@@ -115,7 +121,7 @@ class LookupTests(unittest.TestCase):
         self.cache = self.tmp.name
 
     def hf(self, **extra):
-        values = dict(no_engines_env(self.cache))
+        values = dict(no_engines_env(self.cache), **own_home(self.cache))
         values.update(extra)
         return env(**values)
 
@@ -284,7 +290,7 @@ class NarrateTests(Qwen3TtsBase):
         cache = os.path.join(self.tmp.name, "empty-hf")
         m = MODELS["1.7B"]
         fetch = f"~/.venvs/qwen3-tts/bin/hf download {m['repo']} --revision {m['revision']}"
-        with env(**no_engines_env(cache)), on_python_path(site):
+        with env(**no_engines_env(cache)), env(**own_home(cache)), on_python_path(site):
             with self.assertRaises(DubbingError) as e:
                 self.narrate()
             rc, doc = run_cli("narrate", self.script, "--lang", "en", "-o", self.out, "--engine", "qwen3_tts", "--reference", self.ref,
@@ -387,7 +393,7 @@ class RealQwen3TtsTests(unittest.TestCase):
                              ("qwen3_tts", report["model"], report["revision"]))
             self.assertTrue(report["revision_pinned"], report)
             self.assertTrue(p["engine"]["experimental"])
-            self.assertEqual(p["consent"][0]["voice_owner"]["name"], "espeak-ng synthetic voice (CI fixture)")
+            self.assertEqual(p["consent"][0]["voice_owner"], "espeak-ng synthetic voice (CI fixture)")
             self.assertTrue(doc["disclosure"]["cloned_voice"])
             clip = doc["clips"][0]["duration"]
             # speech, not a stub: at least 30 ms per character and no more than a second (a runaway-generation guard)

@@ -760,3 +760,91 @@ Roadmap step 14: every output records that it is synthetic (engine, voice, conse
 ### Contract changes for video-production-agent
 
 Additive only: `disclosure` and `obligations.disclosure` in every op result, `provenance.synthetic_speech`, `policy.disclosure`, and the `dubbing/watermark` tool. `contract_version` stays 1.0.
+
+## ADR-018 Qwen3-TTS: an optional, experimental engine that speaks only in a consented reference voice
+
+### Context
+
+Qwen3-TTS-12Hz-1.7B-Base was asked for as an optional engine that is never a default: voice cloning from a reference clip of about three seconds, plus the 0.6B Base checkpoint if the same API covers it. ADR-001 set the requirements every engine must meet (licences of code and weights, local and offline, Japanese, isolation, obligations as data) and registered exactly four engines. This ADR checks Qwen3-TTS against those requirements and adds it as a fifth engine, marked experimental.
+
+### Facts checked (2026-11-12)
+
+Read: the Hugging Face model cards and model API of both Base checkpoints, the GitHub repository (README, LICENSE, `pyproject.toml`; `main` at `022e286b98fbec7e1e916cb940cdf532cd9f488e`), the `qwen-tts` 0.1.1 wheel from PyPI (SHA-256 `11a290d8dabc7ef91a90c54478c8ab19b3edb1d85c0882313721892bdc4af15d`, the code read without running it), and the checkpoints' small JSON files (`config.json`, `generation_config.json`, `speech_tokenizer/config.json`). No weights were downloaded for this check.
+
+| Fact | Finding | Source |
+|---|---|---|
+| Licence of the code | Apache-2.0: the repository's `LICENSE` (copyright 2026 Alibaba Cloud) and `qwen-tts` 0.1.1 on PyPI | [LICENSE](https://github.com/QwenLM/Qwen3-TTS/blob/main/LICENSE), [PyPI qwen-tts](https://pypi.org/project/qwen-tts/) |
+| Licence of the weights | Apache-2.0: `license: apache-2.0` on both model cards (1.7B-Base revision `fd4b254389122332181a7c3db7f27e918eec64e3`, 0.6B-Base revision `5d83992436eae1d760afd27aff78a71d676296fc`) | [1.7B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base), [0.6B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base) |
+| Commercial use of the generated audio | Allowed. Apache-2.0 grants use of the work and puts no condition on what it generates; neither card nor the README adds a use policy or an output restriction. No credit is required for the audio; the licence's notice obligations apply to redistributing the code or the weights, which this skill never does | the same |
+| Languages | Ten: Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian (both cards). `config.json` (`talker_config.codec_language_id`) lists the same ten; the runtime also takes `auto`. Japanese is native. The vendor's multilingual table reports a Japanese WER of 3.823 for the 1.7B Base and 6.404 for the 0.6B Base (vendor measurement, not reproduced here) | the cards, `config.json` |
+| Runtime package and API | `qwen-tts` 0.1.1 (2026-02-06), a normal pip package; no network service is needed. It pins `transformers==4.57.3` and `accelerate==1.12.0` and pulls in PyTorch (through `torchaudio`), gradio, librosa, soundfile, sox, onnxruntime and einops. It declares Python >= 3.9, but its model code evaluates `str \| None` annotations at import time, so it needs Python >= 3.10 (the card recommends a fresh Python 3.12 environment). API: `Qwen3TTSModel.from_pretrained(<repo id or local directory>, device_map=, dtype=, attn_implementation=)`; `create_voice_clone_prompt(ref_audio, ref_text=None, x_vector_only_mode=False)`; `generate_voice_clone(text, language, ref_audio= or voice_clone_prompt=, **generate kwargs)`, which returns `(list of waveforms, sample rate)`. Given a local directory, `from_pretrained` reads the checkpoint and its `speech_tokenizer/` from it and downloads nothing. The DashScope API and the vLLM serving the README mentions are alternatives this skill does not use | `qwen_tts/inference/qwen3_tts_model.py`, `qwen_tts/core/models/modeling_qwen3_tts.py`, the README |
+| Voice cloning | The Base checkpoints clone from `ref_audio` (a local path, a URL, base64, or an `(array, rate)` pair), either with its transcript (`ref_text`, in-context "ICL" mode) or from the speaker embedding alone (`x_vector_only_mode=True`, no transcript, "cloning quality may be reduced"). They have no built-in speaker (`spk_id` is empty); the nine named speakers belong to the CustomVoice checkpoints, which this engine does not run | the cards, `qwen3_tts_model.py`, `config.json` |
+| 0.6B | Same runtime, same API, same 12 Hz speech tokenizer (`speech_tokenizer/model.safetensors` is byte-identical, SHA-256 `836b7b35…`); `tts_model_size` `0b6` instead of `1b7` | the model API of both repositories |
+| VRAM / CPU | Not stated by the cards or the README. Every example loads on `cuda:0` in bfloat16 with FlashAttention 2, which is recommended "to reduce GPU memory usage" and optional. Weights (bfloat16): 1.7B-Base `model.safetensors` 3.86 GB, 0.6B-Base 1.83 GB, each plus the 0.68 GB speech tokenizer. CPU was measured here, below | the model API (file sizes) |
+| Length per call | No documented limit on text or reference length. Generation stops at `max_new_tokens` codec frames of 12.5 Hz (24 kHz, 1920 samples per frame): the checkpoints' `generation_config.json` allows 8192 (about 655 s); the vendor's evaluation used 2048 (about 164 s). The talker's `max_position_embeddings` is 32768 | `generation_config.json`, `speech_tokenizer/config.json`, the card's evaluation notes |
+| Output sample rate | 24 kHz mono (`output_sample_rate: 24000`; the decoder returns it as an int) | `speech_tokenizer/config.json`, `qwen3_tts_tokenizer.py` |
+| Consent and watermark | Nothing in the cards, the README or the package about consent, misuse or a watermark, and the package embeds none | the same |
+| Seed | Sampling (`do_sample` true, temperature 0.9, top-k 50, top-p 1.0, repetition penalty 1.05, the same for the sub-talker) runs through PyTorch, so `torch.manual_seed` fixes it | `generation_config.json`, `qwen3_tts_model.py` |
+
+### Decision
+
+- **A fifth engine, never a default.** `qwen3_tts` serves NARRATE, DUB and AUDIO_DESCRIPTION. `DEFAULT_ENGINE` is unchanged (Chatterbox for every op). This amends ADR-001's "exactly the four OS ADR-012 engines".
+- **Experimental.** A published human-preference ranking placed this model low, while the vendor's own metrics are strong. Its quality must be judged by listening before anyone makes it a default. This is data, not prose:
+  - `EngineSpec.experimental` (true here, false for the other four) and `experimental_reason`;
+  - the contract's `engines.experimental` (`["qwen3_tts"]`) and `engines.experimental_policy`, and `experimental` on its `dependencies` entry;
+  - a warning with the reason in every op result that used it;
+  - `engine.experimental` in every provenance block.
+- **Not a pip extra** (ADR-001, ADR-002). `qwen-tts` pins its own transformers and accelerate and pulls in PyTorch and gradio, which would collide with Chatterbox's and Kokoro's stacks in one environment. It runs in the worker under its own interpreter, `DUBBING_QWEN3_TTS_PYTHON` (Python >= 3.10), found by distribution metadata like the other Python engines and never imported here (a test bans `import qwen_tts`). The install line: a venv, `pip install 'qwen-tts==0.1.1'`, then `hf download <repo> --revision <pinned>`.
+- **Checkpoints.** `DUBBING_QWEN3_TTS_MODEL` is `1.7B` (the default) or `0.6B` (the repository ids work too). Each is pinned to the revision read above.
+  - The lookup takes the pinned revision's Hugging Face cache snapshot first, else another complete snapshot (its revision recorded, `revision_pinned: false`), or `DUBBING_QWEN3_TTS_MODEL_DIR` (never replaced by the cache; revision null).
+  - Every file `from_pretrained` reads must be there: `config.json`, `generation_config.json`, `model.safetensors`, `preprocessor_config.json`, `tokenizer_config.json`, `vocab.json`, `merges.txt` and `speech_tokenizer/` (`config.json`, `model.safetensors`, `preprocessor_config.json`).
+  - `config.json` must say `qwen3_tts`, the 12 Hz tokenizer, `base` and the selected size. A CustomVoice or VoiceDesign checkpoint, or the other size, is `INCOMPATIBLE`, and the detail names the right `DUBBING_QWEN3_TTS_MODEL`.
+- **Doctor.** `OK`; `MISSING` (no package, or no weights); `INCOMPATIBLE` (a version outside `>=0.1.1 <0.2.0`, Python < 3.10, an unknown selector, the wrong checkpoint). Missing weights are a guided error: the report and `MODEL_NOT_FOUND` carry `download`, the one `hf download <repo> --revision <rev>` line (with the `hf` next to `DUBBING_QWEN3_TTS_PYTHON` when it is set), and the message says it. `select_engine` and `Engine.require` pass `download` on for any engine that reports one.
+- **Synthesis, in the worker only.** `from_pretrained(<local snapshot>, device_map=cpu or cuda:0, dtype=float32 on CPU, bfloat16 on CUDA)`; `DUBBING_QWEN3_TTS_DEVICE` overrides the device. Then one speaker-embedding prompt per reference clip (`x_vector_only_mode=True`), and one `generate_voice_clone(text, language=<name>, voice_clone_prompt=, max_new_tokens=2048)` per line, after `torch.manual_seed(seed)`. The cap is the vendor's evaluation setting, so a line that never ends stops at about 164 s, and the timing checks then catch it; this skill's own limit of 500 characters per line is unchanged. Clips are written as 16-bit PCM mono at the returned rate (24 kHz). An empty clip is `INVALID_RESULT`.
+- **Voice and consent (ADR-009, unchanged).** The Base checkpoints have no built-in voice, so every line is voice cloning:
+  - `--voice` is refused (`INVALID_ARGUMENT`), and so is a line without a reference (`INVALID_ARGUMENT`, `details.needs: reference_audio`, `policy: voice_cloning`);
+  - a reference without its owner's consent record is `CONSENT_REQUIRED`, before any engine work and again in the worker, before the model loads;
+  - the consent summary goes into each clip's provenance, and the disclosure always says a real person's voice is imitated with consent (ADR-017).
+- **No watermark.** `watermark: null`. The disclosure records `checked: false` with the reason, and `dubbing watermark --engine qwen3_tts` is refused. No credit is required (`credit: null`).
+- **Clone mode.** Speaker embedding only (`clone_mode: x_vector_only`), because no op takes a transcript of the reference clip today. The upstream notes that cloning quality may be lower than with a transcript, so a listening test should name the mode it heard.
+- **Seed.** Set and recorded per clip. `deterministic` stays false, as for the other neural engines (ADR-016): a fixed seed repeats on one machine, not across hardware.
+- **Provenance.** `engine.model` is the repository id, and `engine.revision` (new, null for the other engines) the snapshot's commit. `engine.code_license` and `engine.weights_license` are Apache-2.0, and `engine.experimental` is true. Each clip's `parameters.engine_parameters` holds `clone_mode`, `language`, `max_new_tokens`, `dtype` and the checkpoint's sampling settings (`generation_config`).
+- **Pronunciation and controls.** Respelling (ADR-015). No speed or pitch control (ADR-016).
+
+### Tests
+
+- `tests/test_qwen3_tts.py`, with a fake `qwen_tts` package in the 0.1.1 shapes. The fake loads only a complete local directory with the Hugging Face libraries offline, and only a local reference file. Its pitch follows the seed. It runs through the real worker.
+  - Spec and contract: licences, no watermark, never a default, experimental.
+  - Lookup: package, Python 3.9, versions, missing weights with the download line, the pinned revision preferred, the 0.6B selector, a CustomVoice config refused, an explicit directory.
+  - NARRATE: loaded once, one prompt, the seed and `max_new_tokens` reach the runtime, and the provenance (model id, revision, licence, consent). The same seed gives the same audio.
+  - Refusals before the engine (no reference, a voice, no record, another clip, an unsupported language), and the worker refusing a record revoked after the op's check.
+  - CUDA in bfloat16; runtime failures that leave nothing; the guided error through the CLI.
+  - DUB with a reference voice per speaker, one prompt each.
+- The existing tests now list five engines.
+- CI: the `unit` job asserts five engines and `qwen3_tts` as the only experimental one. The `integration`, `engines` and `voicevox` jobs allow the real-Qwen3-TTS skip.
+- **Real engine, manual only** (`.github/workflows/heavy-tests.yml`, job `qwen3_tts`, started from the Actions tab or `gh workflow run heavy-tests.yml --ref <branch>`). It installs `qwen-tts` 0.1.1 in its own venv on CPU PyTorch, and fetches the 0.6B Base at its pinned revision with both LFS files' SHA-256 checked (CI only; the skill never downloads). It makes a synthetic reference voice with espeak-ng (no person's voice) and writes its consent record. Then it narrates one short English sentence twice with seed 0, and puts the timings, the peak memory and whether the two runs match in the job summary.
+
+### Contract changes for video-production-agent
+
+Additive only:
+
+- a new engine `qwen3_tts` in `engines.registered` and in `dependencies`;
+- `experimental` and `experimental_reason` on every registered engine, `experimental` on every engine dependency, `engines.experimental` and `engines.experimental_policy`;
+- `engine.revision` and `engine.experimental` in `provenance.fields` and in every provenance block;
+- an optional `download` in the details of `MODEL_NOT_FOUND`;
+- `qwen3_tts` in the `describe` argv's engine list.
+
+No field is removed or renamed, and `contract_version` stays 1.0. An agent pinned to an earlier commit keeps working. It needs the new pin only to offer this engine, and then it should show the experimental warning to the user.
+
+### Follow-ups
+
+- In-context cloning with a transcript of the reference clip (`ref_text`): a transcript input per reference (CLI and voice profile), recorded with its hash.
+- A listening comparison with Chatterbox on Japanese and English lines (the same text, a consented reference) before this engine's status changes.
+- GPU (CUDA, bfloat16) is not exercised in CI.
+
+### Sources
+
+- [Hugging Face Qwen/Qwen3-TTS-12Hz-1.7B-Base (licence, languages, API, evaluation)](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base), [model API (revision, file sizes, LFS SHA-256)](https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-1.7B-Base?blobs=true)
+- [Hugging Face Qwen/Qwen3-TTS-12Hz-0.6B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base), [model API](https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-0.6B-Base?blobs=true)
+- [QwenLM/Qwen3-TTS (README)](https://github.com/QwenLM/Qwen3-TTS), [LICENSE](https://github.com/QwenLM/Qwen3-TTS/blob/main/LICENSE), [pyproject.toml](https://github.com/QwenLM/Qwen3-TTS/blob/main/pyproject.toml)
+- [PyPI qwen-tts 0.1.1](https://pypi.org/project/qwen-tts/0.1.1/), and its dependencies' licences on PyPI: [transformers](https://pypi.org/project/transformers/4.57.3/), [accelerate](https://pypi.org/project/accelerate/1.12.0/), [gradio](https://pypi.org/project/gradio/), [librosa](https://pypi.org/project/librosa/), [torchaudio](https://pypi.org/project/torchaudio/), [soundfile](https://pypi.org/project/soundfile/), [sox](https://pypi.org/project/sox/), [onnxruntime](https://pypi.org/project/onnxruntime/), [einops](https://pypi.org/project/einops/)

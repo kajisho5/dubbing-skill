@@ -58,6 +58,9 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
   - なぜ要るか：プラットフォームの AI 表記ルールと、声の権利の説明責任に対応できる
   - Done when: a Chatterbox fixture's watermark is detected, and the disclosure reaches the publish plan
   - Done (ADR-017): every op result carries `disclosure` (`dubbing/disclosure@1`: what was synthesised, engine, voices, voice profile, the consent record of a cloned voice, the watermark check, `labels`, a neutral English `line` and `publish.append` with the credits for publish-skill's description) and every provenance `synthetic_speech: true`; `dubbing watermark <media>` reads Chatterbox's Perth mark back from any file with resemble-perth's own detector. In CI the real Chatterbox narration's mark is detected from the file (also after AAC encoding into an MP4, measured), and the line reaches the real publish-skill `plan` (`metadata.description`, description rows PASS). Agent side (carrying `publish.append` into `publish.upload`) left to video-production-agent
+- [x] **15. Qwen3-TTS, an optional and experimental engine** — Qwen3-TTS-12Hz Base (1.7B, or 0.6B) for cloned voices only, with the consent gate of step 6; never a default, because a published human-preference ranking placed it low while the vendor's own metrics are strong ([docs/decisions.md](docs/decisions.md) ADR-018)
+  - Done when: doctor reports it with its pinned checkpoint and the download line; it runs through the real worker on a fake runtime in every CI run, and the real 0.6B on CPU in the manual heavy-tests workflow
+  - Open: a listening comparison with Chatterbox before its status changes; cloning with a transcript of the reference (ICL)
 
 ## Boundaries
 
