@@ -4,8 +4,9 @@
 
 The pronunciation dictionary checked by transcription-skill on the output (roadmap step 12, ADR-015).
 
-- `dubbing terms <script> --pronunciation <dict.json> --lang <lang> --transcript <transcript.json>`: given transcription-skill's Transcript of the output, `heard` says for each dictionary term the script uses how often the transcript has it as written and as its reading, against how often the script says it, with `heard.summary.not_heard` (also warned about). Additive: `[--transcript <transcript.json>]` on the `dubbing/terms` tool.
-- CI (`voicevox` job): the three-term medical fixture is narrated through the real VOICEVOX with the dictionary and once without it as a control, both outputs transcribed by transcription-skill (faster-whisper, no prompt), and both checked.
+- `dubbing terms <script> --pronunciation <dict.json> --lang <lang> --transcript <transcript.json>`: checks transcription-skill's Transcript of the output. `heard` gives, for each dictionary term the script uses, how often the transcript has its reading, against how often the script uses the term. The reading counts as kana, or as a homophone: another written form whose characters read as the reading, such as 航空 for コウクウ. The term itself written back is counted apart (`written`), because it does not show which reading was spoken. `summary.not_heard` and `summary.written_only` are also warned about. Additive: `[--transcript <transcript.json>]` on the `dubbing/terms` tool.
+- Homophones are read with SudachiPy and SudachiDict core (Apache-2.0), the optional extra `readings`. This extra is the package's first, and it is not an engine. Without it the result and a warning say homophones were not read.
+- CI (`voicevox` job): the three-term medical fixture is narrated through the real VOICEVOX twice, once with the dictionary and once without it as a control. transcription-skill (faster-whisper base, no prompt) transcribes both outputs. The run with the dictionary must have every term heard. The control must have 口腔 and 腹腔 not heard.
 
 ## 0.2.0 - unreleased
 
