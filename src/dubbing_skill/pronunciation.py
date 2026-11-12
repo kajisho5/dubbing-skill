@@ -335,12 +335,84 @@ def prepare(path: Optional[str], engine: Any, lang: str, texts: Sequence[str]) -
 
 TRANSCRIPT_SCHEMA_PREFIX = "transcription-skill/transcript/"
 _TRANSCRIPT_DROP = re.compile(r"[\s、。，．,.？?！!・「」『』（）()\"'“”‘’…]+")
-HEARD_METHOD = ("the transcript's segment text, NFKC, without spaces and punctuation, searched for each term as written "
-                "and for its reading (hiragana and katakana folded, long vowels spelled as they sound); a term is heard "
-                "when it is found at least as many times as the script contains it")
-HEARD_LIMIT = ("a transcript is written text: a term heard as written means the recogniser wrote that word, which it "
-               "can also do from another reading of it; compare with a run without the dictionary (a control) to see "
-               "that the check tells the readings apart on this recogniser")
+HEARD_METHOD = ("the transcript's segment text, NFKC, without spaces and punctuation, searched for each term: as its "
+                "reading in kana (hiragana and katakana folded, long vowels spelled as they sound), as another written "
+                "form that reads as the dictionary's reading (homophones such as 航空 for コウクウ: every reading the "
+                "Japanese dictionary gives each run of characters, joined, must spell the reading exactly over whole "
+                "characters), and as the term as written; a term is heard when the reading is found at least as many "
+                "times as the script uses the term")
+HEARD_LIMIT = ("a transcript is written text: the term itself written back (status 'written') does not show which "
+               "reading was spoken, since the recogniser can write it from either; only kana or a homophone does")
+READINGS_INSTALL = "pip install sudachipy sudachidict_core   (or: pip install \"dubbing-skill[readings]\")"
+_MAX_SURFACE = 6
+_LOOKUP: Any = None                        # tests put a lookup here: surface -> set of katakana readings
+
+
+def reading_lookup() -> Optional[Any]:
+    """surface -> the set of katakana readings the Japanese dictionary gives it (SudachiPy with SudachiDict core,
+    Apache-2.0, optional), or None when it is not installed."""
+    global _LOOKUP
+    if _LOOKUP is not None:
+        return _LOOKUP
+    try:
+        from sudachipy import Dictionary as _SudachiDictionary  # type: ignore[import-not-found]
+        sudachi = _SudachiDictionary(dict="core")
+    except Exception:  # noqa: BLE001 - not installed, or no dictionary: the check runs without homophones
+        return None
+    cache: Dict[str, frozenset] = {}
+
+    def lookup(surface: str) -> frozenset:
+        if surface not in cache:
+            try:
+                cache[surface] = frozenset(normalise_kana(m.reading_form()) for m in sudachi.lookup(surface))
+            except Exception:  # noqa: BLE001
+                cache[surface] = frozenset()
+        return cache[surface]
+    _LOOKUP = lookup
+    return lookup
+
+
+def _is_kana(text: str) -> bool:
+    return bool(text) and all("ァ" <= c <= "ヺ" or c == "ー" for c in normalise_kana(text))
+
+
+def homophone_spans(text: str, reading: str, term: str, lookup: Any) -> List[Tuple[int, int]]:
+    """Non-overlapping spans of `text`, left to right, whose characters can be read as `reading`: each run of up to
+    six characters takes any reading the dictionary gives it (kana reads as itself), and the joined readings must
+    spell `reading` exactly. A span that is the term itself, or kana only, is left out (counted elsewhere)."""
+    target = normalise_kana(reading)
+    if not target:
+        return []
+    memo: Dict[Tuple[int, int], Optional[int]] = {}
+
+    def end_of(i: int, k: int) -> Optional[int]:
+        if k == len(target):
+            return i
+        key = (i, k)
+        if key in memo:
+            return memo[key]
+        memo[key] = None
+        for n in range(1, min(_MAX_SURFACE, len(text) - i) + 1):
+            surface = text[i:i + n]
+            options = set(lookup(surface))
+            if _is_kana(surface):
+                options.add(normalise_kana(surface))
+            for r in options:
+                if r and target.startswith(r, k):
+                    j = end_of(i + n, k + len(r))
+                    if j is not None:
+                        memo[key] = j
+                        return j
+        return None
+    spans, i = [], 0
+    while i < len(text):
+        j = end_of(i, 0)
+        if j is not None and j > i and text[i:j] != term and not _is_kana(text[i:j]):
+            spans.append((i, j))
+            i = j
+        else:
+            i += 1
+    return spans
 
 
 def _transcript_text(doc: Dict[str, Any]) -> str:
@@ -352,8 +424,8 @@ def _count(pattern: "re.Pattern[str]", text: str) -> int:
 
 
 def heard_check(transcript_path: str, entries: Sequence[Entry], expected: Dict[str, int], lang: str) -> Dict[str, Any]:
-    """`dubbing terms --transcript`: whether a transcription-skill Transcript of the output contains each dictionary
-    term the script uses, as written or as its reading, as often as the script does (roadmap step 12)."""
+    """`dubbing terms --transcript`: whether a transcription-skill Transcript of the output has each dictionary term
+    the script uses read as the dictionary says, as often as the script uses it (roadmap step 12)."""
     src = os.path.abspath(transcript_path)
     if not os.path.isfile(src):
         raise DubbingError("INPUT_NOT_FOUND", f"{transcript_path} is not a file", {"input": transcript_path})
@@ -369,29 +441,36 @@ def heard_check(transcript_path: str, entries: Sequence[Entry], expected: Dict[s
     raw = _transcript_text(doc)
     text = _TRANSCRIPT_DROP.sub("", unicodedata.normalize("NFKC", raw))
     sounds = phonetic_kana(text)
+    japanese = lang.lower().split("-")[0] == "ja"
+    lookup = reading_lookup() if japanese else None
     prov = doc.get("provenance") if isinstance(doc.get("provenance"), dict) else {}
-    terms, missing = [], []
+    terms: List[Dict[str, Any]] = []
     for e in sorted((e for e in entries if expected.get(e.term)), key=lambda e: e.term):
         want = expected[e.term]
-        written = _count(_pattern(unicodedata.normalize("NFKC", e.term)), text)
+        term = unicodedata.normalize("NFKC", e.term)
+        written = _count(_pattern(term), text)
         reading = phonetic_kana(_TRANSCRIPT_DROP.sub("", e.reading))
-        as_reading = sounds.count(reading) if reading else 0
-        heard = written + as_reading
-        status = "heard" if heard >= want else ("partly" if heard else "not_heard")
-        if status != "heard":
-            missing.append(e.term)
-        terms.append({"term": e.term, "reading": e.reading, "expected": want, "as_written": written,
-                      "as_reading": as_reading, "status": status})
+        as_kana = sounds.count(reading) if reading else 0
+        spans = homophone_spans(text, e.reading, term, lookup) if lookup else []
+        as_reading = as_kana + len(spans)
+        status = ("heard" if as_reading >= want else "written" if as_reading + written >= want
+                  else "partly" if as_reading + written else "not_heard")
+        terms.append({"term": e.term, "reading": e.reading, "expected": want, "as_kana": as_kana,
+                      "as_homophone": [text[a:b] for a, b in spans], "as_written": written, "status": status})
     warnings = []
     t_lang = doc.get("language")
     if isinstance(t_lang, str) and t_lang not in ("unknown", "") and not lang_matches(t_lang, lang) \
             and not lang_matches(lang, t_lang):
         warnings.append(f"the transcript's language is {t_lang}, the script's {lang}")
+    if japanese and lookup is None:
+        warnings.append(f"no Japanese reading dictionary here, so homophones are not read: {READINGS_INSTALL}")
+    by = {k: [t["term"] for t in terms if t["status"] == k] for k in ("heard", "written", "partly", "not_heard")}
     return {"transcript": {"path": src, "sha256": sha256_file(src), "engine": doc.get("engine") or prov.get("engine"),
                            "model": prov.get("model"), "language": t_lang, "text": raw},
+            "readings": {"homophones": lookup is not None, "dictionary": "SudachiDict core" if lookup else None},
             "terms": terms, "method": HEARD_METHOD, "limit": HEARD_LIMIT, "warnings": warnings,
-            "summary": {"terms": len(terms), "heard": len(terms) - len(missing), "not_heard": missing,
-                        "all_heard": not missing}}
+            "summary": {"terms": len(terms), "heard": len(by["heard"]), "written_only": by["written"],
+                        "not_heard": by["partly"] + by["not_heard"], "all_heard": len(by["heard"]) == len(terms)}}
 
 
 def terms_report(script_path: str, dictionary_path: str, lang: str, transcript_path: Optional[str] = None) -> Dict[str, Any]:
@@ -425,7 +504,10 @@ def terms_report(script_path: str, dictionary_path: str, lang: str, transcript_p
     if transcript_path:
         check = heard_check(transcript_path, entries, counts, lang)
         doc["heard"] = check
-        doc["warnings"] = check["warnings"] + ([f"{len(check['summary']['not_heard'])} dictionary term(s) were not found in "
-                                                f"the transcript as written or as read: {check['summary']['not_heard']}"]
-                                               if check["summary"]["not_heard"] else [])
+        sm = check["summary"]
+        doc["warnings"] = check["warnings"] + (
+            [f"{len(sm['not_heard'])} dictionary term(s) were not heard as the dictionary reads them in the transcript: "
+             f"{sm['not_heard']}"] if sm["not_heard"] else []) + (
+            [f"{len(sm['written_only'])} term(s) came back only as written, which does not show the reading spoken: "
+             f"{sm['written_only']}"] if sm["written_only"] else [])
     return doc

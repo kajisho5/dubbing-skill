@@ -15,6 +15,10 @@ keywords = ["tts", "dubbing", "narration", "audio-description", "chatterbox", "v
 # as its own app, and found by doctor.
 dependencies = []
 
+[project.optional-dependencies]
+# Not an engine: the Japanese reading dictionary `dubbing terms --transcript` reads homophones with (ADR-015; Apache-2.0)
+readings = ["sudachipy>=0.6.8", "sudachidict_core>=20230927"]
+
 [project.scripts]
 dubbing = "dubbing_skill.cli:main"
 

@@ -255,37 +255,57 @@ jobs:
         with:
           repository: kajisho5/transcription-skill
           path: vendor/transcription-skill
-      - name: transcription-skill with faster-whisper in its own virtual environment (a small model, CI only)
+      - name: transcription-skill with faster-whisper in its own virtual environment (the base model, CI only)
         run: |
           set -eu
           python -m venv "$RUNNER_TEMP/transcription"
           tr="$RUNNER_TEMP/transcription/bin"
           "$tr/python" -m pip install --upgrade pip
           # av pinned: faster-whisper 1.2.1 opens audio with av.open(metadata_errors=...), which PyAV 19 no longer takes
-          "$tr/python" -m pip install "./vendor/transcription-skill[faster-whisper]" "av==15.1.0"
+          "$tr/python" -m pip install "./vendor/transcription-skill[faster-whisper]" "faster-whisper==1.2.1" "av==15.1.0"
           "$tr/python" -m pip list | grep -i -E "^(transcription-skill|faster-whisper|ctranslate2|av) "
-          for m in $WHISPER_MODELS; do "$tr/transcription" models pull "$m"; done
+          "$tr/transcription" models pull base
           echo "TRANSCRIPTION=$tr/transcription" >> "$GITHUB_ENV"
-        env:
-          WHISPER_MODELS: base small
+          python -m pip install "sudachipy==0.7.0" "sudachidict_core==20261015"
       - name: The three medical terms, checked by transcription-skill on the output (roadmap step 12, ADR-015)
         # NARRATE the fixture with the dictionary, and once without it as a control, through the real VOICEVOX; each
-        # output is transcribed by transcription-skill (faster-whisper, no prompt, no vocabulary: nothing tells the
-        # recogniser the terms) and `dubbing terms --transcript` looks for each term as written or as its reading.
+        # output is transcribed by transcription-skill (faster-whisper base, no prompt, no vocabulary: nothing tells
+        # the recogniser the terms) and `dubbing terms --transcript` looks for each term read as the dictionary says
+        # (kana, or a homophone read with SudachiDict). With the dictionary every term must be heard; without it the
+        # two terms VOICEVOX reads otherwise on its own (口腔, 腹腔) must not be, so the check tells the readings apart.
         run: |
           set -eu
           fx=tests/fixtures/pronunciation
           dubbing narrate "$fx/medical_ja.txt" -o with.wav --lang ja --engine voicevox --pronunciation "$fx/medical_ja.json" --ffmpeg-skill vendor/ffmpeg-skill --json > with.json || { cat with.json; exit 1; }
           dubbing narrate "$fx/medical_ja.txt" -o without.wav --lang ja --engine voicevox --ffmpeg-skill vendor/ffmpeg-skill --json > without.json || { cat without.json; exit 1; }
-          { echo "### Pronunciation dictionary checked by transcription-skill (real VOICEVOX 0.26.0, faster-whisper, no prompt)"; echo;
-            echo "| model | run | heard | not heard | transcript |"; echo "|---|---|---|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
-          for m in base small; do
-            for run in with without; do
-              "$TRANSCRIPTION" transcribe "$run.wav" --language ja --model "$m" --no-cache --json -o "$run.$m.transcript.json" > "$run.$m.out.json" || { cat "$run.$m.out.json"; exit 1; }
-              dubbing terms "$fx/medical_ja.txt" --pronunciation "$fx/medical_ja.json" --lang ja --transcript "$run.$m.transcript.json" --json > "$run.$m.terms.json" || true
-              python -c "import json,sys; h=json.load(open('$run.$m.terms.json', encoding='utf-8'))['heard']; print('| $m | $run | %d of %d | %s | %s |' % (h['summary']['heard'], h['summary']['terms'], ', '.join(h['summary']['not_heard']) or '-', h['transcript']['text']))" | tee -a "$GITHUB_STEP_SUMMARY"
-            done
+          { echo "### Pronunciation dictionary checked by transcription-skill (real VOICEVOX 0.26.0, faster-whisper base, no prompt)"; echo;
+            echo "| run | VOICEVOX's reading (AudioQuery kana) | transcript | heard | not heard |"; echo "|---|---|---|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+          for run in with without; do
+            "$TRANSCRIPTION" transcribe "$run.wav" --language ja --model base --no-cache --json -o "$run.transcript.json" > "$run.out.json" || { cat "$run.out.json"; exit 1; }
+            dubbing terms "$fx/medical_ja.txt" --pronunciation "$fx/medical_ja.json" --lang ja --transcript "$run.transcript.json" --json > "$run.terms.json"
           done
+          python - <<'EOF'
+          import json, os, urllib.parse, urllib.request
+          kana = []
+          for line in open("tests/fixtures/pronunciation/medical_ja.txt", encoding="utf-8").read().split():
+              q = urllib.request.Request("http://127.0.0.1:50021/audio_query?speaker=3&text=" + urllib.parse.quote(line), method="POST")
+              kana.append(json.load(urllib.request.urlopen(q, timeout=60))["kana"])
+          w = json.load(open("with.json", encoding="utf-8"))["pronunciation"]["lines"]
+          read = {"with": " / ".join(ln["read_as"] for ln in w), "without": " / ".join(kana)}
+          out = {}
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              for run in ("with", "without"):
+                  h = json.load(open(f"{run}.terms.json", encoding="utf-8"))["heard"]
+                  out[run] = h
+                  row = (f"| {run} | {read[run]} | {h['transcript']['text']} | "
+                         + ", ".join(f"{t['term']} ({'/'.join(t['as_homophone']) or t['status']})" for t in h["terms"] if t["status"] == "heard")
+                         + f" | {', '.join(h['summary']['not_heard'] + h['summary']['written_only']) or '-'} |")
+                  print(row)
+                  fh.write(row + "\n")
+          assert out["with"]["readings"]["homophones"], out["with"]["readings"]
+          assert out["with"]["summary"]["all_heard"] and out["with"]["summary"]["terms"] == 3, out["with"]
+          assert {"口腔", "腹腔"} <= set(out["without"]["summary"]["not_heard"]), out["without"]
+          EOF
       - name: Engine log
         if: always()
         run: docker logs voicevox 2>&1 | tail -n 60 || true
