@@ -171,7 +171,7 @@ class EngineGateTests(unittest.TestCase):
             self.assertEqual((e.exception.code, e.exception.details["policy"]), ("INVALID_ARGUMENT", "voice_cloning"))
 
     def test_cloning_engines_need_the_record(self):
-        for eid in ("chatterbox", "style_bert_vits2"):
+        for eid in ("chatterbox", "style_bert_vits2", "qwen3_tts"):
             with self.assertRaises(DubbingError, msg=eid) as e:
                 get_engine(eid).check_request(EngineRequest("dub", "x", "ja", "o.wav", reference_audio=self.ref))
             self.assertEqual(e.exception.code, "CONSENT_REQUIRED", eid)

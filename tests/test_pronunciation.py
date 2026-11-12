@@ -271,8 +271,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(c["inputs"]["pronunciation"]["schema"], PRONUNCIATION_SCHEMA)
         self.assertIsNone(c["inputs"]["pronunciation"]["default"])
         methods = {eid: e["pronunciation"] for eid, e in c["engines"]["registered"].items()}
-        self.assertEqual(methods, {"chatterbox": "respell", "kokoro": "phoneme_hint", "style_bert_vits2": "respell",
-                                   "voicevox": "user_dictionary"})
+        self.assertEqual(methods, {"chatterbox": "respell", "kokoro": "phoneme_hint", "qwen3_tts": "respell",
+                                   "style_bert_vits2": "respell", "voicevox": "user_dictionary"})
         tools = {t["tool_id"]: t for t in c["tools"]}
         self.assertIn("dubbing/terms", tools)
         for op in ("narrate", "dub", "audio-description"):

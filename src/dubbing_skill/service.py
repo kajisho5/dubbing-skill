@@ -17,7 +17,8 @@ from .procs import TIMEOUT_EXIT, child_env, run_process_group
 
 WORKER_MODULE = "dubbing_skill.engines.worker"
 DEFAULT_TIMEOUT = 3600.0
-INTERPRETER_ENV = {"chatterbox": "DUBBING_CHATTERBOX_PYTHON", "kokoro": "DUBBING_KOKORO_PYTHON"}
+INTERPRETER_ENV = {"chatterbox": "DUBBING_CHATTERBOX_PYTHON", "kokoro": "DUBBING_KOKORO_PYTHON",
+                   "qwen3_tts": "DUBBING_QWEN3_TTS_PYTHON"}
 
 
 def engine_interpreter(engine_id: str) -> str:

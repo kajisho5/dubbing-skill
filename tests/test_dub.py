@@ -322,7 +322,7 @@ class DubCliAndContractTests(unittest.TestCase):
         self.assertTrue(tool["implemented"])
         self.assertEqual(tool["schema"], DUB_SCHEMA)
         self.assertEqual(tool["limits"]["tempo"], 1.0)
-        self.assertEqual(tool["engines"], ["chatterbox", "style_bert_vits2"])
+        self.assertEqual(tool["engines"], ["chatterbox", "qwen3_tts", "style_bert_vits2"])
         self.assertIn("a reference voice without a consent record that checks out", tool["refused"])
         self.assertIn("cut", TOOLS_USED)
         self.assertEqual(FLAGS_USED["cut"], ("input", "output", "start", "end", "accurate", "json"))

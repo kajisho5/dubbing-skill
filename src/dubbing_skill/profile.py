@@ -8,7 +8,8 @@ A profile is a `dubbing/voice-profile@1` JSON file:
      "engine": "voicevox", "voice": "3", "lang": ["ja"], "speed": 1.05, "pitch": 0.0, "loudness_target": -16.0, "seed": 0}
 
   id               a slug (a-z, 0-9, . _ -), the profile's name in receipts
-  engine, voice    the engine and its voice (VOICEVOX: a style id; Kokoro: a voice id; Chatterbox: its built-in voice)
+  engine, voice    the engine and its voice (VOICEVOX: a style id; Kokoro: a voice id; Chatterbox: its built-in voice;
+                   Qwen3-TTS: none, it speaks only in a consented reference voice)
   reference        optional: a reference voice (voice cloning), relative to the profile file, with `consent`, the voice
                    owner's consent record; the consent gate (ADR-009) applies as on the command line, with no bypass
   lang             optional: the languages the profile is for (BCP-47); any other --lang is refused
@@ -110,7 +111,7 @@ def load_profile(path: str) -> VoiceProfile:
         problems.append("name must be a short string")
     engine = doc.get("engine")
     if not isinstance(engine, str) or not engine:
-        problems.append("engine is required (chatterbox, voicevox, kokoro, style_bert_vits2)")
+        problems.append("engine is required (chatterbox, voicevox, kokoro, style_bert_vits2, qwen3_tts)")
     voice = doc.get("voice")
     if voice is not None and (isinstance(voice, bool) or not isinstance(voice, (str, int))):
         problems.append("voice must be a string (or a VOICEVOX style id)")

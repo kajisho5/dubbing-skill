@@ -30,8 +30,8 @@ jobs:
       - name: doctor (no engines, no ffmpeg-skill here; exit 1 = status fail is expected)
         shell: bash
         run: dubbing doctor --json --ffmpeg-skill "$RUNNER_TEMP/none" > doctor.json || test $? -eq 1
-      - name: doctor lists all four engines, each MISSING, and translation as a caller input
-        run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['chatterbox','kokoro','style_bert_vits2','voicevox'], e; assert all(v['status']=='MISSING' and v['install'] for v in e.values()), e; assert d['checks']['translation']['engine'] is None"
+      - name: doctor lists all five engines, each MISSING, Qwen3-TTS experimental, and translation as a caller input
+        run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['chatterbox','kokoro','qwen3_tts','style_bert_vits2','voicevox'], e; assert all(v['status']=='MISSING' and v['install'] for v in e.values()), e; assert [k for k, v in e.items() if v['experimental']]==['qwen3_tts'], e; assert d['checks']['translation']['engine'] is None"
       - name: the contract publishes all three ops (EXPERIMENTAL) and the consent record with no bypass
         shell: bash
         run: |
@@ -45,7 +45,7 @@ jobs:
     # offline `plan` receives the AI voice disclosure, roadmap step 14, ADR-017). No engine and no weights are installed (ADR-001): NARRATE,
     # DUB and AUDIO_DESCRIPTION run on the fake Chatterbox, VOICEVOX, Kokoro and Style-Bert-VITS2, the media through the
     # real ffmpeg-skill (probe, join, audio, cut, silence) on test videos made with FFmpeg's own sources. Nothing may skip here except the real-engine tests, which run in
-    # `engines` (Chatterbox) and `voicevox`. Run against ffmpeg-skill main and the 3.0.0 release pinned by commit (ADR-013).
+    # `engines` (Chatterbox), `voicevox` and the manual heavy-tests workflow (Qwen3-TTS, ADR-018). Run against ffmpeg-skill main and the 3.0.0 release pinned by commit (ADR-013).
     name: integration (ffmpeg-skill ${{ matrix.ffmpeg_skill.name }})
     strategy:
       fail-fast: false
@@ -78,7 +78,7 @@ jobs:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: python -m pip install -e .
-      - name: All tests run; only the real-engine tests (engines and voicevox jobs) may skip
+      - name: All tests run; only the real-engine tests (engines and voicevox jobs, heavy-tests workflow) may skip
         env:
           DUBBING_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
@@ -87,11 +87,11 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (Chatterbox|VOICEVOX)"
+          ! grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (Chatterbox|VOICEVOX|Qwen3-TTS)"
       - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0; DUB renders at tempo 1.0, ADR-014)
         run: |
           dubbing doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
-          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==4; o=d['checks']['operations']; assert all(o[k]['implemented'] for k in ('narrate','dub','audio_description')), o; assert o['audio_description']['inputs']['detect_gaps']['problem'] is None, o['audio_description']; t=o['dub']['tempo']; assert t['rendered']==1.0 and t['above_1']['ready'] is False and t['above_1']['ffmpeg_skill']['used'] is False, t"
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert len(d['checks']['engines'])==5; o=d['checks']['operations']; assert all(o[k]['implemented'] for k in ('narrate','dub','audio_description')), o; assert o['audio_description']['inputs']['detect_gaps']['problem'] is None, o['audio_description']; t=o['dub']['tempo']; assert t['rendered']==1.0 and t['above_1']['ready'] is False and t['above_1']['ffmpeg_skill']['used'] is False, t"
 
   engines:
     # Linux only, the real Chatterbox (ADR-005): chatterbox-tts 0.1.7 in its own virtual environment, as the README
@@ -99,7 +99,7 @@ jobs:
     # environment), on CPU PyTorch 2.6.0 from the PyTorch CPU index. The six checkpoint files 0.1.7 loads are fetched
     # once at a pinned Hugging Face revision and checked against the SHA-256 the repository publishes for them (LFS);
     # the skill itself never downloads. The real-Chatterbox tests that skip everywhere else must run and pass here, and
-    # nothing else may skip except the real-VOICEVOX tests (voicevox job).
+    # nothing else may skip except the real-VOICEVOX tests (voicevox job) and the real-Qwen3-TTS one (heavy-tests workflow).
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
@@ -178,7 +178,7 @@ jobs:
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real VOICEVOX"
+          if grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (VOICEVOX|Qwen3-TTS)"; then echo "::error::a test skipped"; exit 1; fi
           for t in test_real_chatterbox_narrates_japanese test_real_chatterbox_narrates_english test_real_chatterbox_dubs_a_video test_real_chatterbox_watermark_is_detected_and_disclosed; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done
@@ -191,7 +191,7 @@ jobs:
     # digest, published on 127.0.0.1:50021 only. Running it is use under the VOICEVOX engine terms (commercial and
     # non-commercial use allowed; ENGINE LGPL-3.0, CORE MIT); nothing is redistributed, and the audio made here is
     # discarded. The real-VOICEVOX tests that skip everywhere else must run and pass here, and nothing else may skip
-    # except the real-Chatterbox tests (engines job).
+    # except the real-Chatterbox tests (engines job) and the real-Qwen3-TTS one (heavy-tests workflow).
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -244,7 +244,7 @@ jobs:
           set -o pipefail
           export DUBBING_MEASURE_LOG="$RUNNER_TEMP/measure.md"
           python -m unittest discover -s tests -v 2>&1 | tee test.log
-          ! grep -E "\.\.\. skipped" test.log | grep -v "skipped 'needs the real Chatterbox"
+          if grep -E "\.\.\. skipped" test.log | grep -v -E "skipped 'needs the real (Chatterbox|Qwen3-TTS)"; then echo "::error::a test skipped"; exit 1; fi
           for t in test_real_voicevox_narrates_japanese test_real_voicevox_speakers_and_terms test_real_voicevox_describes_a_video test_real_voicevox_reads_the_dictionary_terms test_real_voicevox_same_profile_same_audio; do
             grep -E "^$t .*\.\.\. ok$" test.log || { echo "::error::$t did not run and pass"; exit 1; }
           done

@@ -1,6 +1,6 @@
 ---
 name: dubbing
-description: Speak text with a local TTS engine and put the speech into a video, timed to the picture. NARRATE turns a script or timed cues into one narration WAV. DUB replaces a programme's dialogue with already-translated lines, each fitted to its source segment and laid over the programme's own sound, ducked. AUDIO_DESCRIPTION speaks descriptions of the picture only inside the programme's gaps (the caller's, or its quiet stretches). Engines are optional and local, never downloaded: Chatterbox (default, Perth-watermarked), VOICEVOX (credit per character), Style-Bert-VITS2 (AGPL, its own server) and Kokoro. A real person's voice is used only with that person's verified consent record. Use it when the user wants narration, a dub or audio description for a video. It does not translate, transcribe, find speakers, write subtitles, mix music or master the programme.
+description: Speak text with a local TTS engine and put the speech into a video, timed to the picture. NARRATE turns a script or timed cues into one narration WAV. DUB replaces a programme's dialogue with already-translated lines, each fitted to its source segment and laid over the programme's own sound, ducked. AUDIO_DESCRIPTION speaks descriptions of the picture only inside the programme's gaps (the caller's, or its quiet stretches). Engines are optional and local, never downloaded: Chatterbox (default, Perth-watermarked), VOICEVOX (credit per character), Style-Bert-VITS2 (AGPL, its own server), Kokoro and Qwen3-TTS (experimental, cloned voices only). A real person's voice is used only with that person's verified consent record. Use it when the user wants narration, a dub or audio description for a video. It does not translate, transcribe, find speakers, write subtitles, mix music or master the programme.
 ---
 
 # dubbing
@@ -28,6 +28,7 @@ Run `dubbing <command>` (installed by `pip install -e .`; stdlib only), or `pyth
 | "the original voice is too loud under the dub" | `--duck 18` (dB the programme is lowered by under each line; default 12) |
 | "speaker A and B need different voices" | `--speaker-voice A=<voice> --speaker-voice B=<voice>` (Style-Bert-VITS2: `--engine style_bert_vits2 --speaker-voice A=jvnv-F1-jp`) |
 | "dub it in the speaker's own voice" | only with that person's consent record: `--speaker-reference A=a.wav --speaker-consent A=a.consent.json` (see Consent) |
+| "try Qwen3-TTS" / "clone this voice with Qwen" | only with the voice owner's consent record: `dubbing narrate script.txt --lang en -o n.wav --engine qwen3_tts --reference voice.wav --consent voice.consent.json --json`; tell the user it is experimental (the result's `warnings`) |
 | "add audio description" | `dubbing describe talk.mp4 desc.json --lang ja -o talk.ad.mp4 --detect-gaps --json` |
 | "here are the pauses to use" | `dubbing describe talk.mp4 desc.json --lang ja -o out.mp4 --gaps gaps.json --json` |
 | "will these lines fit their cues?" | `dubbing fit cues.json line0.wav line1.wav --on-unfit report --json` (writes nothing) |
@@ -76,6 +77,7 @@ Report numbers from the output document, not from memory.
 - `--detect-gaps` finds *quiet* stretches (ffmpeg-skill/silence at `--silence-threshold`, default -35 dBFS). A noisy room has none. Pass speech-free spans from transcription-skill as `--gaps` instead.
 - VOICEVOX characters other than ずんだもん and 四国めたん are `TERMS_UNVERIFIED`. Only pass `--accept-unverified-voice-terms` after the user has checked that character's terms. It does nothing for consent.
 - Kokoro's Japanese is weak (graded C+ to C-). Prefer Chatterbox or VOICEVOX for Japanese.
+- Qwen3-TTS (`qwen3_tts`) is experimental: a published human-preference ranking placed it low while the vendor's own metrics are strong. Never pick it as a default or on your own; use it when the user asks, pass on the result's `warnings`, and let the user judge it by listening. It has no built-in voice: without `--reference` and `--consent` it is refused (`INVALID_ARGUMENT`, `details.needs`), and `--voice` is refused too. `MODEL_NOT_FOUND` carries `details.download`, the exact command for the user to fetch the weights; never run it yourself.
 - `obligations.credit` is empty for Chatterbox. Its obligation is the watermark. Never strip or re-encode it away.
 - A pronunciation dictionary is the caller's data, per project and per language. Never invent readings for the user, and never apply a Japanese dictionary to another `--lang`: only entries for the op's language are used. With VOICEVOX, `pronunciation.summary.unconfirmed` lists terms the engine still read otherwise; for the other engines `confirmed` is null (they give no reading back), so listen or check with transcription-skill.
 - With `--profile`, do not also pass `--engine`, `--voice`, `--reference`, `--consent` or `--seed` with other values: the profile is the voice, and a clash is `INVALID_ARGUMENT`. A profile with a reference voice still needs its consent record. Only VOICEVOX repeats byte for byte (`provenance.engine.deterministic`); neural engines sound alike, not identical.
@@ -85,7 +87,7 @@ Report numbers from the output document, not from memory.
 ## Boundaries
 
 - Every media step is an ffmpeg-skill tool: probe, join, audio, cut, loudness, silence. This skill never runs ffmpeg directly, never takes a shell string or a filter, and never makes silence by itself.
-- Local only. VOICEVOX and Style-Bert-VITS2 are reached on 127.0.0.1 only. Chatterbox and Kokoro run in a worker subprocess under their own interpreter. Nothing is downloaded at run time.
+- Local only. VOICEVOX and Style-Bert-VITS2 are reached on 127.0.0.1 only. Chatterbox, Kokoro and Qwen3-TTS run in a worker subprocess under their own interpreter. Nothing is downloaded at run time.
 - Not here:
   - translation (subtitle-skill or the caller)
   - transcription (transcription-skill)

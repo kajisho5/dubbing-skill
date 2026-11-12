@@ -103,8 +103,9 @@ def closed_port_url() -> str:
 def no_engines_env(hf_cache: str) -> Dict[str, Optional[str]]:
     """Every engine unreachable, whatever this machine has installed or running."""
     return {"DUBBING_VOICEVOX_URL": closed_port_url(), "DUBBING_SBV2_URL": closed_port_url(),
-            "DUBBING_CHATTERBOX_PYTHON": None, "DUBBING_KOKORO_PYTHON": None,
-            "DUBBING_CHATTERBOX_MODEL_DIR": None, "DUBBING_KOKORO_MODEL_DIR": None,
+            "DUBBING_CHATTERBOX_PYTHON": None, "DUBBING_KOKORO_PYTHON": None, "DUBBING_QWEN3_TTS_PYTHON": None,
+            "DUBBING_CHATTERBOX_MODEL_DIR": None, "DUBBING_KOKORO_MODEL_DIR": None, "DUBBING_QWEN3_TTS_MODEL_DIR": None,
+            "DUBBING_QWEN3_TTS_MODEL": None, "DUBBING_QWEN3_TTS_DEVICE": None,
             "HF_HUB_CACHE": hf_cache, "HF_HOME": hf_cache, "XDG_CACHE_HOME": hf_cache}
 
 
@@ -280,7 +281,7 @@ def fake_chatterbox_weights(cache: str) -> str:
     return os.path.dirname(path)
 
 
-FAKE_MODULES = ("chatterbox", "torch", "pykakasi", "perth")
+FAKE_MODULES = ("chatterbox", "torch", "pykakasi", "perth", "qwen_tts")
 # The fake resemble-perth (ADR-017): PerthImplicitWatermarker.get_watermark is 1.0 on any audio that is not silent, 0.0
 # on silence or in mode nowatermark; it raises in mode nodetector. Each call goes to calls.json like the others.
 FAKE_PERTH = r'''
@@ -870,6 +871,135 @@ def kokoro_ready(tmp: str, **fake: Any) -> Iterator[str]:
             for name in [m for m in sys.modules if m.split(".")[0] in ("kokoro", "misaki", "pyopenjtalk", "fugashi")]:
                 del sys.modules[name]
             importlib.invalidate_caches()
+
+
+# The fake Qwen3-TTS runtime (ADR-018): a `qwen_tts` package with Qwen3TTSModel in the shapes of qwen-tts 0.1.1
+# (qwen_tts/inference/qwen3_tts_model.py: from_pretrained, create_voice_clone_prompt, generate_voice_clone returning
+# (list of waveforms, sample rate)), the stub `torch` above with its two dtypes, and a qwen_tts-0.1.1 dist-info, so the
+# engine's checks find it and the worker loads it as it would the real one. It loads only a complete local checkpoint
+# directory with the Hugging Face libraries offline, and only a local reference file. A line lasts QWEN_BASE +
+# QWEN_PER_CHAR * len(text) seconds at 24 kHz; its pitch follows the seed, so a seed that does not arrive shows. Calls
+# go to calls.json. Modes (DUBBING_FAKE_QWEN3_TTS_MODE, read in the worker): tone, fail (generate raises), empty (a clip
+# with no samples), cap (a clip of max_new_tokens frames: the line ran out of frames).
+QWEN_BASE, QWEN_PER_CHAR, QWEN_RATE = 0.2, 0.07, 24000
+FAKE_QWEN_TTS = r"""
+import json, math, os
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODE = os.environ.get("DUBBING_FAKE_QWEN3_TTS_MODE", "tone")
+LANGS = ("auto", "chinese", "english", "german", "italian", "portuguese", "spanish", "japanese", "korean", "french", "russian")
+NEEDED = ("config.json", "generation_config.json", "model.safetensors", "speech_tokenizer/config.json",
+          "speech_tokenizer/model.safetensors")
+
+
+def _record(entry):
+    path = os.path.join(HERE, "calls.json")
+    calls = json.load(open(path)) if os.path.exists(path) else []
+    calls.append(entry)
+    json.dump(calls, open(path, "w"))
+
+
+class _Array:
+    def __init__(self, samples):
+        self.samples = samples
+    def reshape(self, *shape):
+        return self
+    def tolist(self):
+        return list(self.samples)
+
+
+class Qwen3TTSModel:
+    def __init__(self, path, device):
+        self.path = path
+        self.device = device
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        path = pretrained_model_name_or_path
+        if os.environ.get("HF_HUB_OFFLINE") != "1":
+            raise RuntimeError("the fake qwen-tts loads only with the Hugging Face libraries offline")
+        if not (isinstance(path, str) and os.path.isdir(path) and all(os.path.isfile(os.path.join(path, f)) for f in NEEDED)):
+            raise RuntimeError("the fake qwen-tts loads only a complete local checkpoint directory, got %r" % (path,))
+        _record({"call": "from_pretrained", "snapshot": os.path.basename(path), "kwargs": sorted(kwargs),
+                 "device_map": kwargs.get("device_map"), "dtype": kwargs.get("dtype")})
+        return cls(path, kwargs.get("device_map"))
+
+    def create_voice_clone_prompt(self, ref_audio, ref_text=None, x_vector_only_mode=False):
+        if not (isinstance(ref_audio, str) and os.path.isfile(ref_audio)):
+            raise RuntimeError("the fake qwen-tts needs a local reference file, got %r" % (ref_audio,))
+        if not x_vector_only_mode and not ref_text:
+            raise ValueError("ref_text is required when x_vector_only_mode=False (ICL mode). Bad index=0")
+        _record({"call": "create_voice_clone_prompt", "ref_audio": os.path.basename(ref_audio), "ref_text": ref_text,
+                 "x_vector_only_mode": x_vector_only_mode})
+        return [{"ref_audio": os.path.basename(ref_audio)}]
+
+    def generate_voice_clone(self, text, language=None, ref_audio=None, ref_text=None, x_vector_only_mode=False,
+                             voice_clone_prompt=None, non_streaming_mode=False, **kwargs):
+        import torch
+        if language is None or str(language).lower() not in LANGS:
+            raise ValueError("Unsupported languages: [%r]" % (language,))
+        if voice_clone_prompt is None and ref_audio is None:
+            raise ValueError("Either `voice_clone_prompt` or `ref_audio` must be provided.")
+        _record({"call": "generate_voice_clone", "text": text, "language": language, "prompt": voice_clone_prompt,
+                 "kwargs": kwargs, "seed": torch.SEED})
+        if MODE == "fail":
+            raise RuntimeError("fake qwen-tts failed")
+        if MODE == "empty":
+            return [_Array([])], __RATE__
+        if MODE == "cap":                   # the line ran out of codec frames: max_new_tokens frames of 1920 samples
+            return [_Array([0.0] * (kwargs["max_new_tokens"] * 1920))], __RATE__
+        n = int(round((__BASE__ + __PER_CHAR__ * len(text)) * __RATE__))
+        freq = 200.0 + (torch.SEED or 0) % 50
+        return [_Array([0.2 * math.sin(2 * math.pi * freq * i / __RATE__) for i in range(n)])], __RATE__
+"""
+FAKE_QWEN_TORCH = FAKE_TORCH + 'float32 = "torch.float32"\nbfloat16 = "torch.bfloat16"\n'
+
+
+def qwen_line_seconds(text: str) -> float:
+    return QWEN_BASE + QWEN_PER_CHAR * len(text)
+
+
+def fake_qwen3_tts(directory: str, version: str = "0.1.1") -> str:
+    """A directory to put on sys.path / PYTHONPATH holding the fake qwen_tts and torch; returns it."""
+    root = os.path.join(directory, "fake_qwen_site")
+    pkg = os.path.join(root, "qwen_tts")
+    os.makedirs(pkg, exist_ok=True)
+    Path(pkg, "__init__.py").write_text(FAKE_QWEN_TTS.replace("__RATE__", str(QWEN_RATE)).replace("__BASE__", repr(QWEN_BASE))
+                                        .replace("__PER_CHAR__", repr(QWEN_PER_CHAR)), encoding="utf-8")
+    Path(root, "torch.py").write_text(FAKE_QWEN_TORCH, encoding="utf-8")
+    dist = os.path.join(root, f"qwen_tts-{version}.dist-info")
+    os.makedirs(dist, exist_ok=True)
+    Path(dist, "METADATA").write_text(f"Metadata-Version: 2.1\nName: qwen-tts\nVersion: {version}\n", encoding="utf-8")
+    return root
+
+
+def fake_qwen3_tts_weights(cache: str, model: str = "1.7B", revision: Optional[str] = None,
+                           config: Optional[Dict[str, Any]] = None) -> str:
+    """Every file the engine needs, in the Hugging Face cache snapshot of the pinned revision (or `revision`), with a
+    config.json that says what the checkpoint is (`config` replaces it) and the checkpoint's generation defaults."""
+    from dubbing_skill.engines.qwen3_tts import MODEL_FILES, MODELS
+    m = MODELS[model]
+    snap = Path(cache) / ("models--" + m["repo"].replace("/", "--")) / "snapshots" / (revision or m["revision"])
+    for name in MODEL_FILES:
+        (snap / name).parent.mkdir(parents=True, exist_ok=True)
+        (snap / name).write_bytes(b"")
+    doc = config if config is not None else {"model_type": "qwen3_tts", "tokenizer_type": "qwen3_tts_tokenizer_12hz",
+                                             "tts_model_type": "base", "tts_model_size": m["size"]}
+    (snap / "config.json").write_text(json.dumps(doc), encoding="utf-8")
+    (snap / "generation_config.json").write_text(json.dumps(
+        {"do_sample": True, "repetition_penalty": 1.05, "temperature": 0.9, "top_p": 1.0, "top_k": 50, "subtalker_dosample": True,
+         "subtalker_temperature": 0.9, "subtalker_top_p": 1.0, "subtalker_top_k": 50, "max_new_tokens": 8192}), encoding="utf-8")
+    return str(snap)
+
+
+@contextmanager
+def qwen3_tts_ready(tmp: str, mode: str = "tone", model: str = "1.7B", **fake: Any) -> Iterator[str]:
+    """The fake Qwen3-TTS installed and the `model` checkpoint cached, every other engine unreachable. Yields the fake site."""
+    cache = os.path.join(tmp, "hf")
+    os.makedirs(cache, exist_ok=True)
+    fake_qwen3_tts_weights(cache, model)
+    site = fake_qwen3_tts(tmp, **fake)
+    with env(**no_engines_env(cache)), env(DUBBING_FAKE_QWEN3_TTS_MODE=mode, DUBBING_QWEN3_TTS_MODEL=model), on_python_path(site):
+        yield site
 
 
 # The fake Style-Bert-VITS2 API server (roadmap step 8, ADR-011), in the shapes of litagin02/Style-Bert-VITS2 master
