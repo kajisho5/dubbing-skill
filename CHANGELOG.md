@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.1 - unreleased
+## 0.2.1 - 2026-11-13
+
+First release: the tag `v0.2.1` and its GitHub Release (roadmap step 16, ADR-019). From now on a pushed `v*` tag makes the GitHub Release from its CHANGELOG.md section (`.github/workflows/release.yml`); nothing is published to a package index. It also carries 0.2.0 and 0.1.0 below, which were never tagged.
 
 The pronunciation dictionary checked by transcription-skill on the output (roadmap step 12, ADR-015).
 
@@ -8,7 +10,7 @@ The pronunciation dictionary checked by transcription-skill on the output (roadm
 - Homophones are read with SudachiPy and SudachiDict core (Apache-2.0), the optional extra `readings`. This extra is the package's first, and it is not an engine. Without it the result and a warning say homophones were not read.
 - CI (`voicevox` job): the three-term medical fixture is narrated through the real VOICEVOX twice, once with the dictionary and once without it as a control. transcription-skill transcribes both outputs with faster-whisper base and small, with no prompt. A term counts as heard when either model hears it. The run with the dictionary must have every term heard. In the control, neither model may hear 口腔 or 腹腔.
 
-## 0.2.0 - unreleased
+## 0.2.0 - not tagged (first released in 0.2.1)
 
 Qwen3-TTS, an optional and experimental engine (ADR-018).
 
@@ -21,7 +23,7 @@ Qwen3-TTS, an optional and experimental engine (ADR-018).
 - Provenance: `engine.revision` (new, for every engine; null where none is reported), the model id, the licences, the clone mode, the dtype and the checkpoint's sampling settings.
 - Tests: a fake `qwen_tts` runtime through the real worker (`tests/test_qwen3_tts.py`). A manual `heavy tests` workflow (`.github/workflows/heavy-tests.yml`) runs the real 0.6B checkpoint on CPU for one English sentence in a synthetic reference voice.
 
-## 0.1.0 - unreleased
+## 0.1.0 - not tagged (first released in 0.2.1)
 
 AI voice disclosure (roadmap step 14, ADR-017).
 

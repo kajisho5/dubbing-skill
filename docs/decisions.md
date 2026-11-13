@@ -883,3 +883,16 @@ No field is removed or renamed, and `contract_version` stays 1.0. An agent pinne
 - [Hugging Face Qwen/Qwen3-TTS-12Hz-0.6B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base), [model API](https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-0.6B-Base?blobs=true)
 - [QwenLM/Qwen3-TTS (README)](https://github.com/QwenLM/Qwen3-TTS), [LICENSE](https://github.com/QwenLM/Qwen3-TTS/blob/main/LICENSE), [pyproject.toml](https://github.com/QwenLM/Qwen3-TTS/blob/main/pyproject.toml)
 - [PyPI qwen-tts 0.1.1](https://pypi.org/project/qwen-tts/0.1.1/), and its dependencies' licences on PyPI: [transformers](https://pypi.org/project/transformers/4.57.3/), [accelerate](https://pypi.org/project/accelerate/1.12.0/), [gradio](https://pypi.org/project/gradio/), [librosa](https://pypi.org/project/librosa/), [torchaudio](https://pypi.org/project/torchaudio/), [soundfile](https://pypi.org/project/soundfile/), [sox](https://pypi.org/project/sox/), [onnxruntime](https://pypi.org/project/onnxruntime/), [einops](https://pypi.org/project/einops/)
+
+## ADR-019 First release: tag v0.2.1 on main; a pushed v* tag makes the GitHub Release from CHANGELOG.md
+
+### Context
+
+Roadmap step 16. The status is `active` (Velisa ownership decisions 2026-11-12, DECISION_LOG D13): working operations behind the contract, released or not. Until now no version was tagged and every CHANGELOG.md section said `unreleased`, so video-production-agent pinned this contract from main. There was no release workflow.
+
+### Decision
+
+- **The first release is the committed version.** `pyproject.toml` stays at 0.2.1; the tag is `v0.2.1`, on the main commit that dates the CHANGELOG.md section. Earlier sections that were never tagged say `not tagged (first released in 0.2.1)`; their notes stay as they were.
+- **A pushed `v*` tag makes the GitHub Release** (`.github/workflows/release.yml`). The job fails unless the tag equals `v` + the `pyproject.toml` version and CHANGELOG.md has a section for that version that is dated (not `unreleased`) and not empty. That section is the release notes. A release that already exists is left alone, so a re-run does nothing.
+- **Nothing goes to a package index.** The skill is installed from a git checkout across the ecosystem; no PyPI token is configured. Adding publishing needs its own decision.
+- **The next release.** Bump `pyproject.toml` (minor or patch) in the pull request that changes behaviour, with its CHANGELOG.md section; date the section, merge, then tag the merge commit. `contract --json` reports the `pyproject.toml` version, so a tag and its contract always agree. A workflow that resolves and tags the next version on push to main, like the other skills', can replace the manual tag later; it would have to push the tag and create the release in one job, because a tag pushed with the default token starts no workflow.
