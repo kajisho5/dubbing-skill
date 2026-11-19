@@ -79,7 +79,13 @@ class ContractTests(unittest.TestCase):
         for d in c["dependencies"]:
             self.assertIsInstance(d["version_range"], str)
             self.assertFalse(d["version_range"].replace(".", "").isdigit(), d)
-        self.assertEqual([d["id"] for d in c["dependencies"]], ["ffmpeg-skill"] + ENGINES)
+        # Skills only, in the OS contract shape (ADR-020); the engines are described in engines.registered
+        self.assertEqual([(d["skill_id"], d["id"], d["kind"]) for d in c["dependencies"]], [("ffmpeg-skill", "ffmpeg-skill", "skill")])
+        self.assertEqual(sorted(c["engines"]["registered"]), sorted(ENGINES))
+        for eid in ENGINES:
+            r = c["engines"]["registered"][eid]
+            self.assertTrue(r["version_range"] and r["install"] and r["located_by"] and r["code_license"], eid)
+        self.assertEqual(c["skill"], {"id": SKILL_ID, "package": "dubbing-skill", "version": __version__})
         self.assertFalse(c["execution"]["network"])
         self.assertEqual(c["execution"]["loopback_http"], ["style_bert_vits2", "voicevox"])
         json.dumps(c, allow_nan=False)

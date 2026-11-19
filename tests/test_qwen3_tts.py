@@ -107,8 +107,9 @@ class SpecTests(unittest.TestCase):
         self.assertIn("never a default", c["engines"]["experimental_policy"])
         self.assertTrue(c["engines"]["registered"]["qwen3_tts"]["experimental"])
         self.assertFalse(c["engines"]["registered"]["chatterbox"]["experimental"])
-        dep = next(d for d in c["dependencies"] if d["id"] == "qwen3_tts")
-        self.assertEqual((dep["version_range"], dep["experimental"], dep["downloaded_at_run_time"]), (">=0.1.1 <0.2.0", True, False))
+        self.assertNotIn("qwen3_tts", [d["id"] for d in c["dependencies"]], "an engine, not a Skill dependency (ADR-020)")
+        dep = c["engines"]["registered"]["qwen3_tts"]
+        self.assertEqual((dep["version_range"], dep["experimental"]), (">=0.1.1 <0.2.0", True))
         self.assertIn("engine.revision", c["provenance"]["fields"])
         self.assertIn("engine.experimental", c["provenance"]["fields"])
 

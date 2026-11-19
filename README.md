@@ -46,6 +46,8 @@ dubbing terms script.txt --pronunciation terms.json --lang ja --transcript narra
 dubbing watermark final.mp4 --json   # Chatterbox's Perth mark read back from a deliverable
 ```
 
+`contract/contract.json` is the contract committed as a file (`dubbing contract --json` as one line with sorted keys, compact separators and a final newline), so the contract of any commit or tag is `git show <ref>:contract/contract.json`, with nothing installed or run. Regenerate it with `python contract/generate.py`; a unit test fails when it is stale.
+
 ## NARRATE
 
 `dubbing narrate <script> --lang <lang> -o <out.wav>` speaks a script with a local engine and lays the clips on one mono WAV at the engine's rate (24 kHz for Chatterbox). Details are in [ADR-005](docs/decisions.md).

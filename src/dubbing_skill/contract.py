@@ -261,8 +261,12 @@ def voice_terms() -> Dict[str, Any]:
 
 
 def contract() -> Dict[str, Any]:
+    # Skill dependencies only (other Skills this one invokes), each with skill_id and version_range: the OS contract shape
+    # (Velisa registry/capability_contract.schema.json, ADR-018). The engines are not Skills: each one's version range,
+    # licences, install line and location are in engines.registered, and doctor reports whether it is there
+    # (as transcription-skill does). docs/decisions.md ADR-020.
     deps = [
-        {"id": "ffmpeg-skill", "kind": "skill", "required": True, "for": [CAPABILITY_IDS[o] for o in CAPABILITY_IDS],
+        {"skill_id": "ffmpeg-skill", "id": "ffmpeg-skill", "kind": "skill", "required": True, "for": [CAPABILITY_IDS[o] for o in CAPABILITY_IDS],
          "version_range": "any release whose contract declares the tools and flags below (capability detection)",
          "tools": list(TOOLS_USED), "flags": {t: list(f) for t, f in FLAGS_USED.items()},
          "optional_tools": {t: {"flags": list(f), "audio_only": True, "for": OPTIONAL_USE[t]} for t, f in OPTIONAL_TOOLS.items()},
@@ -270,16 +274,10 @@ def contract() -> Dict[str, Any]:
          "located_by": ["--ffmpeg-skill", "$DUBBING_FFMPEG_SKILL_DIR", "$VIDEO_AGENT_FFMPEG_SKILL_DIR",
                         "~/.claude/skills/ffmpeg-skill", "./vendor/ffmpeg-skill", "../ffmpeg-skill"]},
     ]
-    for eid in engine_ids():
-        s = get_engine(eid).spec
-        deps.append({"id": eid, "kind": "engine-" + s.kind, "required": False, "for": [CAPABILITY_IDS[o] for o in s.ops],
-                     "version_range": s.version_range, "license": s.code_license, "weights_license": s.weights_license,
-                     "credit_required": s.credit_required, "watermark": s.watermark, "install": s.install,
-                     "located_by": list(s.located_by), "downloaded_at_run_time": False, "experimental": s.experimental})
     return {
         "skill_id": SKILL_ID,
         "id": SKILL_ID,
-        "skill": PACKAGE_NAME,
+        "skill": {"id": SKILL_ID, "package": PACKAGE_NAME, "version": __version__},
         "version": __version__,
         "contract_version": CONTRACT_VERSION,
         "provides": [{"id": CAPABILITY_IDS[op], "lifecycle": "EXPERIMENTAL" if IMPLEMENTED_OPS[op] else "PROPOSED",
