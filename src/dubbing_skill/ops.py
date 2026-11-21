@@ -48,7 +48,7 @@ from .ffmpeg_skill import FfmpegSkill, SkillInfo
 from .disclosure import build_disclosure
 from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
-from .provenance import build_provenance, sha256_text
+from .provenance import build_provenance, run_engine, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
 
 NARRATE_SCHEMA = f"{SKILL_ID}/narrate@1"
@@ -410,7 +410,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         steps.append({"tool": "ffmpeg-skill/probe", "for": "timeline"})
 
         first = results[0]
-        engine_doc = dict(report, version=first.engine_version, model=first.model)
+        engine_doc = run_engine(report, first)
         voice_profile = profile_receipt(profile)
         clips = []
         for line, r, res, facts in zip(script.lines, reqs, results, clip_facts):
