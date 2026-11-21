@@ -964,3 +964,77 @@ Today's release commits wrote CHANGELOG.md headings as `## vX.Y.Z - date`. Every
 
 - A version bumped by hand in a pull request is released whatever its labels.
 - A release that fails the tests is not made; a later push retries.
+
+## ADR-023 The 1.0 compatibility promise: DUB is STABLE; NARRATE, AUDIO_DESCRIPTION and the engines stay experimental
+
+2026-11-21. The ecosystem rule is Velisa ADR-031 (decision D46); the owner approved the 1.0 transition, one Skill at a time.
+
+### Context
+
+Velisa ADR-031 sets what 1.0 means for a Skill. From 1.0.0, a change that `si contract-diff` calls breaking, to a part of the contract the promise covers, ships only in a major release. The promise covers the `provides[]` entries marked `STABLE`, the tools they map to, their request, response and error shapes, and the top-level contract fields that are not tied to a capability. An `EXPERIMENTAL` entry may still change in a minor release, with a CHANGELOG line. dubbing-skill is seventh in ADR-031's order, after ingest-skill.
+
+ADR-031's readiness measurements for this repository, checked again on 2026-11-21:
+
+- **Breaking changes:** none. `si contract-diff` between the tags that commit `contract/contract.json` (v0.2.2 → v0.2.3 → v0.2.4 → main) gives `none` each time, with only the release version changing. This repository has no contract-diff caller, so no pull request carries a `contract:*` label.
+- **Open roadmap steps:** none; steps 1 to 16 are ticked. The open notes of step 15 (a listening comparison of Qwen3-TTS, cloning with a transcript of the reference) concern an experimental engine.
+- **Known defects:** the two items of issue #28 (CodeRabbit follow-ups) are fixed, each in its own patch release: the `terms --transcript` counts per dictionary entry (#33, v0.2.5) and the engine revision in the provenance (#34, v0.2.6). Issue #36, found while fixing #33, is a defect in `dubbing terms --transcript` for scripts written with spaces; `dubbing/terms` is outside the promise (section 3).
+- **Releases:** ADR-031 counted four (v0.2.1 to v0.2.4); with the two patches below there are six, and 1.0.0 is the seventh. DUB has shipped since 0.1.0 (2026-10-31), before the release flow existed.
+- **Agent:** video-production-agent pins this contract and gates it (`SUPPORTED_SKILL_VERSIONS`), so the re-pin proves the release end to end. Its adapter (agent ADR-085) runs `dubbing dub` and `dubbing doctor` only.
+
+All three ops speak through text-to-speech engines, and every engine is third-party code with third-party weights. The contract has a `lifecycle` field only on `provides[]` entries; the engines are described in the top-level `engines` block and in each op's `--engine` choices. A parameter or an engine has no lifecycle field, so its status is recorded in text: the README, the CHANGELOG and this ADR (ADR-031 section 3).
+
+### Decision
+
+#### 1. `STABLE`: `speech.dub` (`dubbing/dub`)
+
+DUB has been in every release since 0.1.0 (roadmap step 5, ADR-008), and it is the op video-production-agent calls. It runs only on this machine: the engine in a worker subprocess or on loopback, every media step through ffmpeg-skill, `execution.network: false`, the input never changed. The promise covers:
+
+- the command and its options: `dub <programme> <cues>`, `--lang`, `-o` (`.mp4`, `.mov`, `.mkv`, `.wav`), `--source-cues`, `--voice`, `--speaker-voice`, `--reference` / `--consent`, `--speaker-reference` / `--speaker-consent`, `--audio-stream`, `--max-overrun`, `--on-unfit fail|keep`, `--duck`, `--voice-gain`, `--translation-note`, `--seed`, `--timeout`, `--overwrite`, `--ffmpeg-skill`, `--offline`, `--json`, and their limits (`tools[dubbing/dub].limits`);
+- the result `dubbing/dub@1`: `output` (with `av_delta` and the tolerance), `fit` (the timing fit at tempo 1.0 and `fit.unfit`), `mix`, `clips[]`, `kept_original`, `obligations` (`credit`, `credits`, `watermark`) and the `provenance` blocks (`synthetic_speech: true`, the engine fields of `ENGINE_FIELDS`, the consent record, the text and output hashes, the translation note);
+- the consent gate (ADR-009): `dubbing/consent@1`, checked before any engine work and again in the worker, `CONSENT_REQUIRED` (exit 2) with `details.reason` / `details.problems`, and `policy.consent_record.bypass: null`. It is never relaxed, in any release;
+- the error codes, their exit codes and `retryable`, the error shape, and the top-level fields `execution`, `policy`, `inputs.cues`, `not_provided` and `dependencies` (ffmpeg-skill, by tool and flag);
+- two tools without a `provides[]` entry, because the agent calls them: `dubbing/doctor` (`dubbing/doctor@1`: `status`, `checks.python`, `checks.ffmpeg_skill`, `checks.operations.<op>.ready`, the shape of each `checks.engines.<id>` row) and `dubbing/contract` (alias `skill --json`).
+
+#### 2. Experimental parts of DUB
+
+These may still change in a minor release, with a CHANGELOG line:
+
+- **The engines.** Which engines are registered (`engines.registered`, `tools[dubbing/dub].engines`, the `--engine` choices), the default engine (`engines.default`), and each engine's voices, languages, controls, version range, install line and model files. Each engine is third-party code and weights (Chatterbox, Style-Bert-VITS2, and Qwen3-TTS, which is `engines.experimental`, ADR-018). A new engine version can change what it accepts, and an engine whose licence or terms change may have to leave. The audio an engine makes is not part of the contract at all: the same text, voice and seed can sound different with another engine version.
+- **The newer opt-in parts**, each added on 2026-11-06 (steps 11 to 14) and out for about two weeks:
+  - `--profile` and the result's `voice_profile` (ADR-016);
+  - `--pronunciation` and the result's `pronunciation` block (ADR-015). Its transcript check (`dubbing terms --transcript`) had a counting defect fixed only in #33;
+  - `fit.rate` and the length budgets (`fit.unfit[].budget`, the `TIMING_OVERFLOW` budget details, ADR-014);
+  - the `disclosure` block (`dubbing/disclosure@1`, ADR-017). Its hand-off to publish-skill is not yet wired in the agent. `provenance.synthetic_speech: true` and `obligations` are in section 1 and stay.
+
+A request with none of these options, naming an engine the contract lists and that `doctor` reports `OK`, gets the `STABLE` behaviour of section 1. These parts are left out because they are new or depend on third-party engines, not because they are known to be wrong.
+
+#### 3. `EXPERIMENTAL` entries
+
+- **`speech.narrate`** (`dubbing/narrate`). It has shipped since 0.1.0, but nothing calls it yet, so no consumer has proven it end to end. Timed cues are refused (`FFMPEG_SKILL_UNAVAILABLE`) until ffmpeg-skill's `pad` takes audio-only input (ADR-005); when it does, NARRATE's behaviour for timed cues changes. It also takes VOICEVOX and Kokoro, whose character terms and voice credits are checked per voice (ADR-006, ADR-011).
+- **`speech.audio_description`** (`dubbing/audio-description`). Nothing calls it yet. With `--detect-gaps` its placement depends on ffmpeg-skill `silence` and its threshold defaults, which have been measured on test signals only.
+- **The other tools** (`dubbing/fit`, `dubbing/terms`, `dubbing/watermark`, `dubbing/engines`) have no `provides[]` entry and are not covered.
+
+Each is promoted, as metadata only, once it has a caller and its open dependency is settled.
+
+#### 4. How the promise is kept
+
+- Promoting an entry, or a part listed in section 2, to `STABLE` is metadata only. si's `lifecycle-promoted` rule classifies it as `none`, so it can ship in any release.
+- **Deprecation** of a `STABLE` entry or of an option of section 1 (ADR-031 section 3):
+  1. mark it `DEPRECATED` in a minor release, naming its replacement in the README and the CHANGELOG (for an option, in the tool's `description` too);
+  2. keep it working for at least one more minor release and 30 days;
+  3. remove it only in the next major release.
+- **Breaking-change review.** This repository has no contract-diff caller, so `major-label-check.yml` finds no `contract:*` label and passes. The reviewer of each pull request that changes `contract/contract.json` runs `si contract-diff` against the latest tag:
+  - a `breaking` item in `speech.dub`, `dubbing/dub` or a section 1 field needs the `major` label;
+  - si reports a change to a section 2 part of DUB (an engine leaving the `--engine` choices, a profile field) as a change to `dubbing/dub` or to a top-level field. Such a break ships in a minor release only when every breaking item is a section 2 part, and the pull request and the CHANGELOG entry name it;
+  - a break that is only in `speech.narrate`, `speech.audio_description` or an uncovered tool ships in a minor release, named in the CHANGELOG.
+
+#### 5. Release
+
+The 1.0 pull request carries the `major` label, so release-drafter resolves 0.2.x → 1.0.0, and `release_gate.py` treats `major` as release-level. No workflow changes. The contract diff of the pull request is `none` (one `lifecycle-promoted` item). `contract_version` stays `1.0`: it is a separate axis from the release version.
+
+### Consequences
+
+- A caller that runs DUB with the section 1 options can float across 1.x minors. video-production-agent's adapter sends only those.
+- A caller that uses NARRATE, AUDIO_DESCRIPTION, a section 2 part or a particular engine reads the CHANGELOG on each minor release. The agent already reads the engine list from the contract and leaves out `engines.experimental`.
+- video-production-agent's re-pin sees a 0.x → 1.0.0 release with a `none` diff and widens its gate to `1.0.`.
+- Adding an engine, an option or a result field stays a minor release.

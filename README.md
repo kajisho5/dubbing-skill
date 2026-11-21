@@ -18,12 +18,12 @@
 
 AI narration (TTS), voice replacement (dubbing) and audio description, timed to the picture, for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Every media step (probe, assembling clips, putting the voice into the video, loudness) goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.2.1, all three ops experimental.** `contract`, `doctor`, `engines`, `narrate`, `dub` ([ADR-008](docs/decisions.md)), `describe` ([ADR-010](docs/decisions.md)) and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). A reference voice needs its owner's consent record ([ADR-009](docs/decisions.md)). Qwen3-TTS is an optional, experimental engine for cloned voices, never a default ([ADR-018](docs/decisions.md)). See the [roadmap](ECOSYSTEM_ROADMAP.md).
+**Status: 1.0.0. DUB is `STABLE`; NARRATE and AUDIO_DESCRIPTION stay experimental ([compatibility promise](#compatibility-promise-10), [ADR-023](docs/decisions.md)).** `contract`, `doctor`, `engines`, `narrate`, `dub` ([ADR-008](docs/decisions.md)), `describe` ([ADR-010](docs/decisions.md)) and `fit` (timing fit, [ADR-007](docs/decisions.md)) work. NARRATE speaks with Chatterbox (default) or VOICEVOX ([ADR-006](docs/decisions.md)). A reference voice needs its owner's consent record ([ADR-009](docs/decisions.md)). Qwen3-TTS is an optional, experimental engine for cloned voices, never a default ([ADR-018](docs/decisions.md)). See the [roadmap](ECOSYSTEM_ROADMAP.md).
 
 | Op | Capability | Default engine | Lifecycle | Step |
 |---|---|---|---|---|
 | NARRATE | `speech.narrate` | Chatterbox Multilingual | `EXPERIMENTAL` | 2 ([ADR-005](docs/decisions.md)) |
-| DUB | `speech.dub` | Chatterbox Multilingual | `EXPERIMENTAL` | 5 ([ADR-008](docs/decisions.md)) |
+| DUB | `speech.dub` | Chatterbox Multilingual | `STABLE` | 5 ([ADR-008](docs/decisions.md)) |
 | AUDIO_DESCRIPTION | `speech.audio_description` | Chatterbox Multilingual | `EXPERIMENTAL` | 7 ([ADR-010](docs/decisions.md)) |
 
 How an agent or Claude should use the skill (workflow, request → command, consent, pitfalls) is in [SKILL.md](SKILL.md).
@@ -188,6 +188,23 @@ A reference voice is used only with a consent record (`dubbing/consent@1` JSON) 
 ## ffmpeg-skill
 
 The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `DUBBING_FFMPEG_SKILL_DIR`, `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. Compatibility is checked tool by tool and flag by flag against its contract, not by version number. The tools and flags it needs: `probe`; `join --transition --sample-rate --channels`; `audio --replace --music --music-volume --gain --duck --audio-stream --overwrite`; `loudness --lufs --measure-only`; `cut --start --end --accurate`. Optional: `pad --start --end` on audio-only input (declared `audio_only`), for timed cues; `silence --list --threshold --min-silence`, for `describe --detect-gaps`.
+
+## Compatibility promise (1.0)
+
+From 1.0.0, a breaking change to anything below ships only in a major release (2.0.0), per Velisa ADR-031 ([ADR-023](docs/decisions.md)):
+
+- **`STABLE`:** `speech.dub` (`dubbing dub`), with these parts:
+  - the options `--lang`, `-o` (`.mp4`, `.mov`, `.mkv`, `.wav`), `--source-cues`, `--voice`, `--speaker-voice`, `--reference` / `--consent`, `--speaker-reference` / `--speaker-consent`, `--audio-stream`, `--max-overrun`, `--on-unfit fail|keep`, `--duck`, `--voice-gain`, `--translation-note`, `--seed`, `--timeout`, `--overwrite`, `--ffmpeg-skill`, `--offline` and `--json`, and their limits;
+  - the result `dubbing/dub@1`: `output`, `fit` at tempo 1.0, `mix`, `clips`, `kept_original`, `obligations` and the provenance blocks (`synthetic_speech: true`, the engine fields, the consent record, the hashes);
+  - the consent gate (`dubbing/consent@1`, `CONSENT_REQUIRED`, no bypass), which is never relaxed;
+  - the error codes and exit codes, and the top-level contract fields (`execution`, `policy`, `inputs.cues`, `not_provided`, `dependencies`);
+  - `dubbing doctor` (`dubbing/doctor@1`) and `dubbing contract`, which the agent calls.
+- **Still experimental**, and these may change in a minor release with a CHANGELOG line:
+  - the engines: which engines are registered, the `--engine` choices, the default engine, and each engine's voices, languages, controls and install line. Every engine is third-party code and weights, and Qwen3-TTS is marked experimental on its own (ADR-018). The audio itself is not part of the contract;
+  - DUB's newer opt-in parts: `--profile` (ADR-016), `--pronunciation` (ADR-015), `fit.rate` and the length budgets (ADR-014), and the `disclosure` block (ADR-017);
+  - `speech.narrate` (timed cues wait on ffmpeg-skill `pad` for audio-only input) and `speech.audio_description`;
+  - `dubbing fit`, `dubbing terms`, `dubbing watermark` and `dubbing engines`.
+- **Deprecation:** a `STABLE` entry or option is first marked deprecated in a minor release, with its replacement named. It keeps working for at least one more minor release and 30 days, and is removed only in the next major release.
 
 ## JSON and errors
 

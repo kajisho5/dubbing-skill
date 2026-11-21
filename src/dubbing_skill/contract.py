@@ -27,6 +27,13 @@ from .timing import (DEFAULT_MAX_OVERRUN, DEFAULT_MAX_TEMPO, FIT_SCHEMA, MAX_OVE
 
 CONTRACT_VERSION = "1.0"
 CAPABILITY_IDS = {"narrate": "speech.narrate", "dub": "speech.dub", "audio_description": "speech.audio_description"}
+# The 1.0 compatibility promise (docs/decisions.md ADR-023, Velisa ADR-031): a STABLE entry, and the tool it maps to, changes
+# in a breaking way only in a major release. DUB is the op this skill has shipped since 0.1.0 and the one video-production-agent
+# calls; NARRATE (timed cues wait on ffmpeg-skill) and AUDIO_DESCRIPTION (no caller yet) stay EXPERIMENTAL. The engines are
+# outside the promise (third-party models): `engines`, the --engine choices and the default engine may change in a minor
+# release, and so may the newer opt-in parts of DUB that the ADR lists (--profile, --pronunciation, fit.rate and the length
+# budgets, the `disclosure` block). A parameter has no lifecycle field, so the ADR and the README say which.
+STABLE_OPERATIONS = frozenset({"dub"})
 # The cue list every op takes. Its text is already in the target language: this skill does not translate (ADR-003).
 CUES_INPUT = {
     "format": "JSON list of cues, or an SRT / WebVTT file (subtitle-skill output)",
@@ -280,7 +287,8 @@ def contract() -> Dict[str, Any]:
         "skill": {"id": SKILL_ID, "package": PACKAGE_NAME, "version": __version__},
         "version": __version__,
         "contract_version": CONTRACT_VERSION,
-        "provides": [{"id": CAPABILITY_IDS[op], "lifecycle": "EXPERIMENTAL" if IMPLEMENTED_OPS[op] else "PROPOSED",
+        "provides": [{"id": CAPABILITY_IDS[op], "lifecycle": ("STABLE" if op in STABLE_OPERATIONS else "EXPERIMENTAL")
+                                                    if IMPLEMENTED_OPS[op] else "PROPOSED",
                       "tool_id": f"{SKILL_ID}/{op.replace('_', '-')}"} for op in CAPABILITY_IDS],
         "dependencies": deps,
         "inputs": {"cues": CUES_INPUT, "pronunciation": PRONUNCIATION_INPUT, "voice_profile": VOICE_PROFILE_INPUT, "translation": dict(TRANSLATION, decided_in="subtitle-skill (MT engine ADR, open)")},

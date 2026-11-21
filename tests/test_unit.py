@@ -60,6 +60,24 @@ class ErrorTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
+    def test_provides_lifecycle_is_the_1_0_promise(self):
+        """docs/decisions.md ADR-023: DUB is STABLE; NARRATE and AUDIO_DESCRIPTION stay EXPERIMENTAL. Promoting an entry is
+        metadata only (si's `lifecycle-promoted` rule), so the ids, tool ids and their order are unchanged."""
+        from dubbing_skill.contract import STABLE_OPERATIONS
+        c = contract()
+        self.assertEqual(c["provides"], [
+            {"id": "speech.narrate", "lifecycle": "EXPERIMENTAL", "tool_id": "dubbing/narrate"},
+            {"id": "speech.dub", "lifecycle": "STABLE", "tool_id": "dubbing/dub"},
+            {"id": "speech.audio_description", "lifecycle": "EXPERIMENTAL", "tool_id": "dubbing/audio-description"},
+        ])
+        self.assertLessEqual(STABLE_OPERATIONS, set(CAPABILITY_IDS))
+        # what the promise stands on: nothing leaves the machine, the input is never changed, the consent gate has no bypass,
+        # and an experimental engine is never the default of a STABLE op
+        self.assertIs(c["execution"]["network"], False)
+        self.assertIs(c["execution"]["input_is_read_only"], True)
+        self.assertIsNone(c["policy"]["consent_record"]["bypass"])
+        self.assertNotIn(c["engines"]["default"]["dub"], c["engines"]["experimental"])
+
     def test_os_registry_keys_and_provides(self):
         c = contract()
         for k in ("skill_id", "id", "skill", "version", "contract_version", "provides", "dependencies", "not_provided"):
@@ -71,9 +89,9 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(set(p), {"id", "lifecycle", "tool_id"})
             self.assertIn(p["tool_id"], tool_ids)
         # an op moves from PROPOSED to EXPERIMENTAL in the PR that implements it (ADR-002): NARRATE in step 2 (ADR-005),
-        # DUB in step 5 (ADR-008), AUDIO_DESCRIPTION in step 7 (ADR-010)
+        # DUB in step 5 (ADR-008), AUDIO_DESCRIPTION in step 7 (ADR-010); DUB is STABLE from 1.0.0 (ADR-023)
         self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]},
-                         {"speech.narrate": "EXPERIMENTAL", "speech.dub": "EXPERIMENTAL", "speech.audio_description": "EXPERIMENTAL"})
+                         {"speech.narrate": "EXPERIMENTAL", "speech.dub": "STABLE", "speech.audio_description": "EXPERIMENTAL"})
         self.assertEqual([t["tool_id"] for t in c["tools"] if t["role"] == "transformation" and t["implemented"]],
                          ["dubbing/narrate", "dubbing/dub", "dubbing/audio-description"])
         for d in c["dependencies"]:

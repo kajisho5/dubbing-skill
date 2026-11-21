@@ -64,6 +64,9 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
 - [x] **16. First release: tag and GitHub Release** ([v0.2.1](https://github.com/kajisho5/dubbing-skill/releases/tag/v0.2.1), 2026-11-13) — the status is `active` ([Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md): a repository that ships working operations behind its contract is `active`, released or not); release state is tracked here instead. Today `pyproject.toml` says 0.2.1, CHANGELOG.md says `unreleased` and there is no tag, so video-production-agent pins this contract from main. Date the CHANGELOG section, tag `v0.2.1` on main and publish a GitHub Release with that section as its notes. A release workflow like the other skills' (one job on push to main; CI-, docs- and test-only merges cut no release) can follow.
   - Done when: the tag `v0.2.1` and its GitHub Release exist, `contract --json` reports the tag's version, and video-production-agent can pin the tag instead of main
 
+- [x] **17. 1.0.0: the compatibility promise** — `speech.dub` is `STABLE`; `speech.narrate`, `speech.audio_description`, the engines and DUB's newer opt-in parts (`--profile`, `--pronunciation`, `fit.rate` and budgets, `disclosure`) stay experimental (Velisa ADR-031 / D46) ([#35](https://github.com/kajisho5/dubbing-skill/pull/35), [docs/decisions.md](docs/decisions.md) ADR-023)
+  - Done when: the contract marks DUB `STABLE` with a `none` contract diff, the README and an ADR state the promise, and 1.0.0 is released and re-pinned by the agent
+
 ## Boundaries
 
 Translation is subtitle-skill's (`translate`, its steps 4-5, done); this skill takes translated cues as input (ADR-003) and never translates.
