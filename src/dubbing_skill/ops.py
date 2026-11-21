@@ -327,8 +327,12 @@ def _lay_out(skill: FfmpegSkill, clips: List[str], plan: Dict[str, Any], rate: i
 
 
 def clip_credits(engine: Engine, res: Any) -> List[Dict[str, Any]]:
-    """The credits one clip must carry: the one the engine resolved for its voice (VOICEVOX: "VOICEVOX:<character>" with
-    the speaker and the terms, ADR-006), else the engine's declared credit, else none."""
+    """The credits one clip must carry: every one the engine resolved for it (Pocket TTS: the model's and its preset voice's
+    source, ADR-024), else the one it resolved for its voice (VOICEVOX: "VOICEVOX:<character>" with the speaker and the
+    terms, ADR-006), else the engine's declared credit, else none."""
+    several = res.extra.get("credits")
+    if isinstance(several, list) and several:
+        return [dict(c) for c in several if isinstance(c, dict) and c.get("credit")]
     resolved = res.extra.get("credit")
     if isinstance(resolved, dict) and resolved.get("credit"):
         return [dict(resolved)]

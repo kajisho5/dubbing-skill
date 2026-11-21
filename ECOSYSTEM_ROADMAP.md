@@ -66,6 +66,9 @@ ffmpeg-skill probe, join (NARRATE), audio (extract, `--music --music-volume --ga
 
 - [x] **17. 1.0.0: the compatibility promise** — `speech.dub` is `STABLE`; `speech.narrate`, `speech.audio_description`, the engines and DUB's newer opt-in parts (`--profile`, `--pronunciation`, `fit.rate` and budgets, `disclosure`) stay experimental (Velisa ADR-031 / D46) ([#35](https://github.com/kajisho5/dubbing-skill/pull/35), [docs/decisions.md](docs/decisions.md) ADR-023)
   - Done when: the contract marks DUB `STABLE` with a `none` contract diff, the README and an ADR state the promise, and 1.0.0 is released and re-pinned by the agent
+- [x] **18. Opt-in English engines, no default change** — Kokoro also serves DUB (preset voices); Kyutai Pocket TTS (`pocket_tts`, English, experimental, never a default) with an allowlist of CC BY 4.0 and CC0 preset voices, the CC BY 4.0 credit on every clip, and voice cloning only with the consent record of step 6; Chatterbox stays the default and is noted as unmaintained upstream ([#37](https://github.com/kajisho5/dubbing-skill/pull/37), [docs/decisions.md](docs/decisions.md) ADR-024)
+  - Done when: doctor lists the engine with its install line and pinned files; it runs through the real worker on a fake runtime in every CI run, with no model downloaded; the consent tests cover it; the release is a minor version with an additive contract
+  - Open: a listening comparison with Chatterbox; Pocket TTS's non-English models and smaller English variants
 
 ## Boundaries
 

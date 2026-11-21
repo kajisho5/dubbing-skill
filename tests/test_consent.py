@@ -164,16 +164,16 @@ class EngineGateTests(unittest.TestCase):
         self.record = make_consent(self.tmp.name, self.ref)
 
     def test_engines_that_cannot_clone_refuse_a_reference_whatever_the_record(self):
-        for eid, lang in (("voicevox", "ja"), ("kokoro", "ja")):
+        for eid, lang in (("voicevox", "ja"), ("kokoro", "ja"), ("kokoro", "en-us")):
             with self.assertRaises(DubbingError, msg=eid) as e:
                 get_engine(eid).check_request(EngineRequest("narrate", "x", lang, "o.wav", reference_audio=self.ref,
                                                             params={CONSENT_PARAM: self.record}))
             self.assertEqual((e.exception.code, e.exception.details["policy"]), ("INVALID_ARGUMENT", "voice_cloning"))
 
     def test_cloning_engines_need_the_record(self):
-        for eid in ("chatterbox", "style_bert_vits2", "qwen3_tts"):
+        for eid, lang in (("chatterbox", "ja"), ("style_bert_vits2", "ja"), ("qwen3_tts", "ja"), ("pocket_tts", "en")):
             with self.assertRaises(DubbingError, msg=eid) as e:
-                get_engine(eid).check_request(EngineRequest("dub", "x", "ja", "o.wav", reference_audio=self.ref))
+                get_engine(eid).check_request(EngineRequest("dub", "x", lang, "o.wav", reference_audio=self.ref))
             self.assertEqual(e.exception.code, "CONSENT_REQUIRED", eid)
         with self.assertRaises(DubbingError) as e:
             get_engine("chatterbox").check_request(EngineRequest("dub", "x", "en", "o.wav", params={CONSENT_PARAM: self.record}))

@@ -105,7 +105,7 @@ def no_engines_env(hf_cache: str) -> Dict[str, Optional[str]]:
     return {"DUBBING_VOICEVOX_URL": closed_port_url(), "DUBBING_SBV2_URL": closed_port_url(),
             "DUBBING_CHATTERBOX_PYTHON": None, "DUBBING_KOKORO_PYTHON": None, "DUBBING_QWEN3_TTS_PYTHON": None,
             "DUBBING_CHATTERBOX_MODEL_DIR": None, "DUBBING_KOKORO_MODEL_DIR": None, "DUBBING_QWEN3_TTS_MODEL_DIR": None,
-            "DUBBING_QWEN3_TTS_MODEL": None, "DUBBING_QWEN3_TTS_DEVICE": None,
+            "DUBBING_QWEN3_TTS_MODEL": None, "DUBBING_QWEN3_TTS_DEVICE": None, "DUBBING_POCKET_TTS_PYTHON": None,
             "HF_HUB_CACHE": hf_cache, "HF_HOME": hf_cache, "XDG_CACHE_HOME": hf_cache}
 
 
@@ -281,7 +281,7 @@ def fake_chatterbox_weights(cache: str) -> str:
     return os.path.dirname(path)
 
 
-FAKE_MODULES = ("chatterbox", "torch", "pykakasi", "perth", "qwen_tts")
+FAKE_MODULES = ("chatterbox", "torch", "pykakasi", "perth", "qwen_tts", "pocket_tts")
 # The fake resemble-perth (ADR-017): PerthImplicitWatermarker.get_watermark is 1.0 on any audio that is not silent, 0.0
 # on silence or in mode nowatermark; it raises in mode nodetector. Each call goes to calls.json like the others.
 FAKE_PERTH = r'''
@@ -999,6 +999,157 @@ def qwen3_tts_ready(tmp: str, mode: str = "tone", model: str = "1.7B", **fake: A
     fake_qwen3_tts_weights(cache, model)
     site = fake_qwen3_tts(tmp, **fake)
     with env(**no_engines_env(cache)), env(DUBBING_FAKE_QWEN3_TTS_MODE=mode, DUBBING_QWEN3_TTS_MODEL=model), on_python_path(site):
+        yield site
+
+
+# The fake Pocket TTS runtime (ADR-024): a `pocket_tts` package with TTSModel in the shapes of pocket-tts 4.0.1
+# (pocket_tts/models/tts_model.py: load_model(language=...) resolving its hf:// files in HF_HUB_CACHE with the Hugging
+# Face libraries offline and falling back to the weights without voice cloning, has_voice_cloning, sample_rate, temp,
+# eos_threshold, get_state_for_audio_prompt(<.safetensors state | audio file>), generate_audio(state, text) returning a
+# 1-D tensor), the stub `torch` above and a pocket_tts-4.0.1 dist-info, so the engine's checks find it and the worker
+# loads it as it would the real one. Nothing is fetched: a file missing from the cache is an error, as offline. A line
+# lasts POCKET_BASE + POCKET_PER_CHAR * len(text) seconds at 24 kHz; its pitch follows the seed. Calls go to calls.json.
+POCKET_BASE, POCKET_PER_CHAR, POCKET_RATE = 0.15, 0.065, 24000
+FAKE_POCKET_TTS = r"""
+import json, math, os
+from pathlib import Path
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CLONING = __CLONING__
+PRESET = __PRESET__
+TOKENIZER = __TOKENIZER__
+
+
+def _record(entry):
+    path = os.path.join(HERE, "calls.json")
+    calls = json.load(open(path)) if os.path.exists(path) else []
+    calls.append(entry)
+    json.dump(calls, open(path, "w"))
+
+
+def _cached(entry):
+    if os.environ.get("HF_HUB_OFFLINE") != "1":
+        raise RuntimeError("the fake pocket-tts resolves its files only with the Hugging Face libraries offline")
+    cache = os.environ.get("HF_HUB_CACHE")
+    path = Path(cache or "/nonexistent") / ("models--" + entry["repo"].replace("/", "--")) / "snapshots" / entry["revision"] / entry["file"]
+    if not path.is_file():
+        raise FileNotFoundError("offline and not cached: %s" % path)
+    return path
+
+
+class _Tensor:
+    def __init__(self, samples):
+        self.samples = samples
+    def detach(self):
+        return self
+    def cpu(self):
+        return self
+    def reshape(self, *shape):
+        return self
+    def tolist(self):
+        return list(self.samples)
+
+
+class TTSModel:
+    def __init__(self, cloning):
+        self.has_voice_cloning = cloning
+        self.temp = 0.3
+        self.eos_threshold = -4.0
+
+    @property
+    def sample_rate(self):
+        return __RATE__
+
+    @classmethod
+    def load_model(cls, language=None, config=None, **kwargs):
+        if language != "english" or config is not None:
+            raise ValueError("the fake pocket-tts has the english model only")
+        _cached(TOKENIZER)
+        try:
+            _cached(CLONING)
+            cloning = True
+        except FileNotFoundError:
+            _cached(PRESET)
+            cloning = False
+        _record({"call": "load_model", "language": language, "kwargs": sorted(kwargs), "cloning": cloning,
+                 "cache": os.path.basename(os.environ.get("HF_HUB_CACHE", ""))})
+        return cls(cloning)
+
+    def get_state_for_audio_prompt(self, audio_conditioning, truncate=False):
+        source = audio_conditioning
+        if isinstance(source, str) and not os.path.isfile(source):
+            raise RuntimeError("the fake pocket-tts takes local files only (no catalogue names, no URLs), got %r" % (source,))
+        source = Path(source)
+        if source.suffix == ".safetensors":
+            kind = "preset_state"
+        else:
+            if not self.has_voice_cloning:
+                raise ValueError("We could not download the weights for the model with voice cloning")
+            kind = "audio"
+        _record({"call": "get_state_for_audio_prompt", "kind": kind, "name": source.name})
+        return {"voice": source.stem, "kind": kind}
+
+    def generate_audio(self, model_state, text_to_generate, max_tokens=50, frames_after_eos=None, copy_state=True):
+        import torch
+        mode = os.environ.get("DUBBING_FAKE_POCKET_TTS_MODE", "tone")
+        _record({"call": "generate_audio", "text": text_to_generate, "voice": model_state["voice"], "kind": model_state["kind"],
+                 "seed": torch.SEED})
+        if mode == "fail":
+            raise RuntimeError("fake pocket-tts failed")
+        if mode == "empty":
+            return _Tensor([])
+        n = int(round((__BASE__ + __PER_CHAR__ * len(text_to_generate)) * __RATE__))
+        freq = 190.0 + (torch.SEED or 0) % 40
+        return _Tensor([0.2 * math.sin(2 * math.pi * freq * i / __RATE__) for i in range(n)])
+"""
+
+
+def pocket_line_seconds(text: str) -> float:
+    return POCKET_BASE + POCKET_PER_CHAR * len(text)
+
+
+def fake_pocket_tts(directory: str, version: str = "4.0.1") -> str:
+    """A directory to put on sys.path / PYTHONPATH holding the fake pocket_tts and torch; returns it."""
+    from dubbing_skill.engines.pocket_tts import CLONING, PRESET, TOKENIZER
+    root = os.path.join(directory, "fake_pocket_site")
+    pkg = os.path.join(root, "pocket_tts")
+    os.makedirs(pkg, exist_ok=True)
+    text = (FAKE_POCKET_TTS.replace("__RATE__", str(POCKET_RATE)).replace("__BASE__", repr(POCKET_BASE))
+            .replace("__PER_CHAR__", repr(POCKET_PER_CHAR)).replace("__CLONING__", repr(CLONING))
+            .replace("__PRESET__", repr(PRESET)).replace("__TOKENIZER__", repr(TOKENIZER)))
+    Path(pkg, "__init__.py").write_text(text, encoding="utf-8")
+    Path(root, "torch.py").write_text(FAKE_TORCH, encoding="utf-8")
+    dist = os.path.join(root, f"pocket_tts-{version}.dist-info")
+    os.makedirs(dist, exist_ok=True)
+    Path(dist, "METADATA").write_text(f"Metadata-Version: 2.1\nName: pocket-tts\nVersion: {version}\n", encoding="utf-8")
+    return root
+
+
+def fake_pocket_tts_weights(cache: str, cloning: bool = False, voices: Tuple[str, ...] = ("alba", "javert", "anna"),
+                            preset: bool = True) -> str:
+    """Empty stand-ins for the files the engine looks for, at the pinned revisions in the Hugging Face cache `cache`: the
+    tokenizer, the model without voice cloning (`preset`), the gated model with it (`cloning`) and the preset voice states."""
+    from dubbing_skill.engines.pocket_tts import CLONING, EMBEDDING, PRESET, TOKENIZER
+    files = [(TOKENIZER, TOKENIZER["file"])] + [(PRESET, EMBEDDING.format(voice=v)) for v in voices]
+    if preset:
+        files.append((PRESET, PRESET["file"]))
+    if cloning:
+        files.append((CLONING, CLONING["file"]))
+    for entry, name in files:
+        path = Path(cache) / ("models--" + entry["repo"].replace("/", "--")) / "snapshots" / entry["revision"] / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+    return cache
+
+
+@contextmanager
+def pocket_tts_ready(tmp: str, mode: str = "tone", cloning: bool = False, **weights: Any) -> Iterator[str]:
+    """The fake Pocket TTS installed and its English files cached (the voice-cloning weights with `cloning`), every other
+    engine unreachable. Yields the fake site."""
+    cache = os.path.join(tmp, "hf")
+    os.makedirs(cache, exist_ok=True)
+    fake_pocket_tts_weights(cache, cloning=cloning, **weights)
+    site = fake_pocket_tts(tmp)
+    with env(**no_engines_env(cache)), env(DUBBING_FAKE_POCKET_TTS_MODE=mode), on_python_path(site):
         yield site
 
 
