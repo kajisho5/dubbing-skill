@@ -317,7 +317,7 @@ class DubCliAndContractTests(unittest.TestCase):
     def test_contract_entry(self):
         c = contract()
         self.assertTrue(IMPLEMENTED_OPS["dub"])
-        self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]}["speech.dub"], "EXPERIMENTAL")
+        self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]}["speech.dub"], "STABLE")   # from 1.0.0 (ADR-023)
         tool = next(t for t in c["tools"] if t["tool_id"] == "dubbing/dub")
         self.assertTrue(tool["implemented"])
         self.assertEqual(tool["schema"], DUB_SCHEMA)

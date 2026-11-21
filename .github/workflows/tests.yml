@@ -33,11 +33,11 @@ jobs:
         run: dubbing doctor --json --ffmpeg-skill "$RUNNER_TEMP/none" > doctor.json || test $? -eq 1
       - name: doctor lists all five engines, each MISSING, Qwen3-TTS experimental, and translation as a caller input
         run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['chatterbox','kokoro','qwen3_tts','style_bert_vits2','voicevox'], e; assert all(v['status']=='MISSING' and v['install'] for v in e.values()), e; assert [k for k, v in e.items() if v['experimental']]==['qwen3_tts'], e; assert d['checks']['translation']['engine'] is None"
-      - name: the contract publishes all three ops (EXPERIMENTAL) and the consent record with no bypass
+      - name: the contract publishes all three ops (DUB STABLE from 1.0.0, ADR-023) and the consent record with no bypass
         shell: bash
         run: |
           dubbing contract --json > contract.json
-          python -c "import json; c=json.load(open('contract.json', encoding='utf-8')); assert {p['id']: p['lifecycle'] for p in c['provides']}=={'speech.narrate':'EXPERIMENTAL','speech.dub':'EXPERIMENTAL','speech.audio_description':'EXPERIMENTAL'}, c['provides']; assert c['policy']['consent_record']['bypass'] is None; assert c['errors']['CONSENT_REQUIRED']['exit_code']==2"
+          python -c "import json; c=json.load(open('contract.json', encoding='utf-8')); assert {p['id']: p['lifecycle'] for p in c['provides']}=={'speech.narrate':'EXPERIMENTAL','speech.dub':'STABLE','speech.audio_description':'EXPERIMENTAL'}, c['provides']; assert c['policy']['consent_record']['bypass'] is None; assert c['errors']['CONSENT_REQUIRED']['exit_code']==2"
 
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract, probe and join),
