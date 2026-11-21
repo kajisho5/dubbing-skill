@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.6 - 2026-11-21
+
+- fix: engine provenance records the model revision the worker loaded, not the earlier report's (#34) (73eec26)
+
+## 0.2.5 - 2026-11-21
+
+- fix: terms --transcript counts each use against the entry that matched it, not every entry with its term (#33) (4837c0e)
+- ci: a contract:breaking pull request on 1.x needs the major label (Velisa ADR-031 section 5) (#32) (341421e)
+- ci: release gate leaves contract:* labels out of the count (#31) (aca0b5a)
+- ci: Velisa's reusable changelog-check/release-guard; dependencies PRs release a patch (D36, D37) (#30) (7c193f0)
+
 ## 0.2.4 - 2026-11-19
 
 - fix(release): CHANGELOG headings in this file's form; test the release commit before pushing; no release for chore/ci/docs-only changes (#29) (9699d30)

@@ -244,6 +244,17 @@ class TranscriptCheckTests(unittest.TestCase):
         doc = self.check("口腔 腹腔 貼付 口腔", language="en")
         self.assertIn("the transcript's language is en, the script's ja", doc["warnings"])
 
+    def test_two_entries_with_the_same_term_are_not_both_counted(self):
+        # en serves en-US too: only the entry that matched each use (the first in the dictionary) is expected
+        d = dictionary(self.tmp.name, [{"term": "Quinoa", "lang": "en", "reading": "keen-wah"},
+                                       {"term": "Quinoa", "lang": "en-US", "reading": "KEEN-wah"}])
+        script = write(os.path.join(self.tmp.name, "s.txt"), "Quinoa for lunch.\nMore quinoa.\n")
+        rc, doc = run_cli("terms", script, "--pronunciation", d, "--lang", "en-US", "--transcript",
+                          transcript(self.tmp.name, "Quinoa for lunch.", "More quinoa.", language="en"), "--json")
+        self.assertEqual(rc, 0, doc)
+        self.assertEqual([(t["term"], t["reading"], t["expected"]) for t in doc["heard"]["terms"]], [("Quinoa", "keen-wah", 2)])
+        self.assertEqual(doc["heard"]["summary"]["terms"], 1)
+
     def test_not_a_transcript_is_refused(self):
         rc, doc = run_cli("terms", MEDICAL_SCRIPT, "--pronunciation", MEDICAL, "--lang", "ja", "--transcript",
                           transcript(self.tmp.name, "x", schema="subtitle-skill/cues@1"), "--json")

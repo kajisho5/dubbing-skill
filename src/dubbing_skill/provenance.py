@@ -24,6 +24,15 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def run_engine(report: Dict[str, Any], result: Any) -> Dict[str, Any]:
+    """The engine report an op's provenance is built from: the availability report, with what the worker that made
+    the clips says it ran (its version, model and, where it reports one, the model's revision) in place of what
+    the report found before the run."""
+    extra = result.extra if isinstance(getattr(result, "extra", None), dict) else {}
+    return dict(report, version=result.engine_version, model=result.model,
+                revision=extra["revision"] if "revision" in extra else report.get("revision"))
+
+
 def build_provenance(*, op: str, engine: Dict[str, Any], text: str, output_path: Optional[str], parameters: Dict[str, Any],
                      voice: Optional[str] = None, translation: Optional[Dict[str, Any]] = None,
                      ffmpeg_skill: Optional[Dict[str, Any]] = None, watermark: Optional[Dict[str, Any]] = None,

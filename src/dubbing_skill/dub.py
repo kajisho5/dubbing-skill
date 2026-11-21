@@ -50,7 +50,7 @@ from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits
 from .disclosure import build_disclosure
 from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
-from .provenance import build_provenance, sha256_text
+from .provenance import build_provenance, run_engine, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine_batch
 from .timing import DEFAULT_MAX_OVERRUN, Slot, attach_rate, check_limits, fit_lines, slots_for
 
@@ -280,7 +280,7 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
         steps.append({"tool": "ffmpeg-skill/probe", "for": "output"})
 
         first = results[0]
-        engine_doc = dict(report, version=first.engine_version, model=first.model)
+        engine_doc = run_engine(report, first)
         statuses = {d["index"]: d for d in plan["lines"]}
         voice_profile = profile_receipt(profile, applies_to="lines whose speaker has no voice of its own",
                                         loudness="recorded, not applied: the level is the mix's (--voice-gain)")
