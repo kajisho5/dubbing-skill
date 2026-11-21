@@ -1,6 +1,6 @@
 """Engine registry. Only engines listed here can be selected or run by the worker; test engines are never
-registered. Four engines are the ones ADR-001 verified; Chatterbox Multilingual V3 is the default for every op. The fifth,
-Qwen3-TTS (ADR-018), is optional and experimental, and never a default."""
+registered. Four engines are the ones ADR-001 verified; Chatterbox Multilingual V3 is the default for every op. Qwen3-TTS
+(ADR-018) and Pocket TTS (ADR-024) are optional and experimental, and never a default."""
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Type
@@ -9,12 +9,13 @@ from ..errors import DubbingError
 from .base import Engine
 from .chatterbox import ChatterboxEngine
 from .kokoro import KokoroEngine
+from .pocket_tts import PocketTtsEngine
 from .qwen3_tts import Qwen3TtsEngine
 from .style_bert_vits2 import StyleBertVits2Engine
 from .voicevox import VoicevoxEngine
 
 ENGINES: Dict[str, Type[Engine]] = {cls.spec.id: cls for cls in (ChatterboxEngine, VoicevoxEngine, StyleBertVits2Engine, KokoroEngine,
-                                                                   Qwen3TtsEngine)}
+                                                                   Qwen3TtsEngine, PocketTtsEngine)}
 DEFAULT_ENGINE: Dict[str, Optional[str]] = {"narrate": ChatterboxEngine.spec.id, "dub": ChatterboxEngine.spec.id,
                                             "audio_description": ChatterboxEngine.spec.id}
 

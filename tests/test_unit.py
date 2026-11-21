@@ -16,14 +16,14 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
-from helpers import (OS_DIR, ROOT, closed_port_url, env, fake_app, fake_chatterbox_weights, fake_hf_file, no_engines_env,
+from helpers import (OS_DIR, ROOT, closed_port_url, env, fake_app, fake_voicevox, fake_chatterbox_weights, fake_hf_file, no_engines_env,
                      run_cli)
 
 from dubbing_skill import SKILL_ID, __version__
 from dubbing_skill.contract import CAPABILITY_IDS, contract
 from dubbing_skill.doctor import doctor
 from dubbing_skill.engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
-from dubbing_skill.engines import chatterbox, kokoro, lookup, pkgprobe, qwen3_tts
+from dubbing_skill.engines import chatterbox, kokoro, lookup, pkgprobe, pocket_tts, qwen3_tts
 from dubbing_skill.engines.base import OPS, EngineRequest, EngineResult, in_range, parse_version
 from dubbing_skill.errors import ERROR_TABLE, EXIT_CODES, DubbingError
 from dubbing_skill.ffmpeg_skill import FLAGS_USED, FfmpegSkill, parse_contract
@@ -31,7 +31,7 @@ from dubbing_skill.procs import TIMEOUT_EXIT, run_process_group
 from dubbing_skill.provenance import build_provenance, sha256_file, sha256_text
 from dubbing_skill.service import engine_interpreter, run_engine
 
-ENGINES = ["chatterbox", "kokoro", "qwen3_tts", "style_bert_vits2", "voicevox"]
+ENGINES = ["chatterbox", "kokoro", "pocket_tts", "qwen3_tts", "style_bert_vits2", "voicevox"]
 SRC = ROOT / "src" / "dubbing_skill"
 
 
@@ -171,7 +171,7 @@ class EngineSpecTests(unittest.TestCase):
         self.assertEqual(engine_ids(), ENGINES)
         self.assertEqual(set(DEFAULT_ENGINE), set(OPS))
         self.assertEqual(set(DEFAULT_ENGINE.values()), {"chatterbox"})        # OS ADR-012 default
-        self.assertEqual(engines_for("dub"), ["chatterbox", "qwen3_tts", "style_bert_vits2"])
+        self.assertEqual(engines_for("dub"), ["chatterbox", "kokoro", "pocket_tts", "qwen3_tts", "style_bert_vits2"])
         self.assertEqual(engines_for("narrate"), ENGINES)
         with self.assertRaises(DubbingError) as e:
             get_engine("xtts")
@@ -183,8 +183,11 @@ class EngineSpecTests(unittest.TestCase):
             self.assertTrue(s.code_license and s.weights_license and s.install and s.located_by, eid)
             self.assertIn("ADR-001", s.licence_checked)
             self.assertTrue(s.sources and all(u.startswith("https://") for u in s.sources), eid)
-            self.assertIn(s.japanese, ("native", "weak"))
-            self.assertIn("ja", s.languages)
+            self.assertIn(s.japanese, ("native", "weak", "none"))
+            if s.japanese == "none":                  # an English-only engine (Pocket TTS, ADR-024)
+                self.assertNotIn("ja", s.languages, eid)
+            else:
+                self.assertIn("ja", s.languages, eid)
             self.assertFalse(s.network_required)
             if s.credit_required:
                 self.assertTrue(s.credit, eid)
@@ -415,8 +418,9 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual((e.exception.details["reason"], e.exception.details["model"]), ("unverified_model", "someone"))
 
     def test_op_the_engine_does_not_serve_is_invalid(self):
-        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(DubbingError) as e:
-            run_engine("kokoro", EngineRequest("dub", "x", "ja", "b.wav"), 60, tmp)
+        # VOICEVOX is the one engine without DUB (Kokoro serves it from 1.1.0, ADR-024); its app answers on loopback
+        with tempfile.TemporaryDirectory() as tmp, fake_voicevox(), self.assertRaises(DubbingError) as e:
+            run_engine("voicevox", EngineRequest("dub", "x", "ja", "b.wav"), 60, tmp)
         self.assertEqual(e.exception.code, "INVALID_ARGUMENT")
 
     def test_engine_timeout_is_retryable(self):
@@ -463,12 +467,13 @@ class FfmpegSkillContractTests(unittest.TestCase):
 
 
 class DoctorTests(unittest.TestCase):
-    def test_doctor_lists_all_five_engines_with_install_status(self):
+    def test_doctor_lists_all_six_engines_with_install_status(self):
         missing = os.path.join(tempfile.gettempdir(), "no-such-ffmpeg-skill")
         with tempfile.TemporaryDirectory() as tmp, env(**no_engines_env(tmp)), \
                 mock.patch.object(chatterbox, "python_packages", return_value=pkgs({"chatterbox-tts": None}, {})), \
                 mock.patch.object(kokoro, "python_packages", return_value=pkgs({"kokoro": None}, {})), \
-                mock.patch.object(qwen3_tts, "python_packages", return_value=pkgs({"qwen-tts": None}, {})):
+                mock.patch.object(qwen3_tts, "python_packages", return_value=pkgs({"qwen-tts": None}, {})), \
+                mock.patch.object(pocket_tts, "python_packages", return_value=pkgs({"pocket-tts": None}, {})):
             d = doctor(missing)
             rc, cli_doc = run_cli("doctor", "--ffmpeg-skill", missing, "--offline", "--json")
         self.assertEqual(sorted(d["checks"]["engines"]), ENGINES)
@@ -485,7 +490,7 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual((d["status"], d["ok"]), ("fail", False))
         self.assertEqual(set(d["checks"]["operations"]), set(OPS))
         self.assertFalse(any(o["ready"] for o in d["checks"]["operations"].values()))
-        self.assertEqual(d["checks"]["operations"]["dub"]["alternatives"], ["qwen3_tts", "style_bert_vits2"])
+        self.assertEqual(d["checks"]["operations"]["dub"]["alternatives"], ["kokoro", "pocket_tts", "qwen3_tts", "style_bert_vits2"])
         self.assertEqual((rc, cli_doc["status"], cli_doc["offline"]), (1, "fail", True))
         self.assertEqual(sorted(cli_doc["checks"]["engines"]), ENGINES)
 

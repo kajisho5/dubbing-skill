@@ -111,7 +111,7 @@ def load_profile(path: str) -> VoiceProfile:
         problems.append("name must be a short string")
     engine = doc.get("engine")
     if not isinstance(engine, str) or not engine:
-        problems.append("engine is required (chatterbox, voicevox, kokoro, style_bert_vits2, qwen3_tts)")
+        problems.append("engine is required (chatterbox, voicevox, kokoro, style_bert_vits2, qwen3_tts, pocket_tts)")
     voice = doc.get("voice")
     if voice is not None and (isinstance(voice, bool) or not isinstance(voice, (str, int))):
         problems.append("voice must be a string (or a VOICEVOX style id)")

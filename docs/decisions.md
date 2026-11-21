@@ -1038,3 +1038,57 @@ The 1.0 pull request carries the `major` label, so release-drafter resolves 0.2.
 - A caller that uses NARRATE, AUDIO_DESCRIPTION, a section 2 part or a particular engine reads the CHANGELOG on each minor release. The agent already reads the engine list from the contract and leaves out `engines.experimental`.
 - video-production-agent's re-pin sees a 0.x → 1.0.0 release with a `none` diff and widens its gate to `1.0.`.
 - Adding an engine, an option or a result field stays a minor release.
+
+## ADR-024 Opt-in English engines: Kokoro also dubs, and Pocket TTS is added as an experimental engine; no default changes
+
+2026-11-21. The owner decided to add new engines as opt-in only and to change no default. The engine layer is experimental under ADR-023 (section 2), so this is an additive minor release.
+
+### Context
+
+Chatterbox Multilingual, the default for every op since ADR-001, was retired by its developer: its README now opens with "As of August 2026, Chatterbox is retired research and is no longer maintained", and the code stays public as an MIT archive. A survey of English engines in November 2026 recommended two opt-in alternatives for English: Kokoro-82M with its preset voices, and Kyutai Pocket TTS for cloned voices. Changing the default would change the output of every existing caller (ADR-023 section 2 allows it in a minor release, but the owner chose not to), so Chatterbox stays the default.
+
+### Facts checked (2026-11-21, primary sources)
+
+Read: the PyPI JSON of `pocket-tts` and `kokoro`; the `pocket-tts` 4.0.1 wheel (its code and `config/*.yaml` read without running it); the Hugging Face model API and cards of `kyutai/pocket-tts`, `kyutai/pocket-tts-without-voice-cloning`, `kyutai/tts-voices` and `hexgrad/Kokoro-82M`; the LICENSE in the pocket-tts GitHub repository; the Chatterbox README. No weights were downloaded.
+
+| Fact | Finding | Source |
+|---|---|---|
+| Pocket TTS package | `pocket-tts` 4.0.1, uploaded 2026-10-21; `Requires-Python <3.15,>=3.10`; depends on `torch>=2.5.0` and huggingface-hub, among others; extra `audio` adds soundfile (needed for a reference clip that is not 16-bit WAV) | [PyPI](https://pypi.org/project/pocket-tts/), the wheel's METADATA |
+| Pocket TTS code licence | MIT (the LICENSE in the wheel and in the repository) | [GitHub](https://github.com/kyutai-labs/pocket-tts) |
+| Pocket TTS weights licence | `cc-by-4.0` on both model repositories. `kyutai/pocket-tts` (with voice cloning) is gated (`gated: auto`); `kyutai/pocket-tts-without-voice-cloning` is not. The card prohibits "voice impersonation or cloning without explicit and lawful consent" | [model card](https://huggingface.co/kyutai/pocket-tts), [without cloning](https://huggingface.co/kyutai/pocket-tts-without-voice-cloning) |
+| English model | `languages/english/model.safetensors`, 219,029,196 bytes (219 MB), in both repositories. pocket-tts 4.0.1's `config/english.yaml` pins it at `db04f0e6…` (with cloning) and `a7056f50…` (without), and the tokenizer `languages/english/tokenizer.json` at `00eac05e…` of the repository without cloning. `load_model` tries the cloning weights first and falls back; `has_voice_cloning` says which loaded | the model API tree at each revision, `tts_model.py` |
+| API | `TTSModel.load_model(language="english")`; `get_state_for_audio_prompt(<audio file, or a .safetensors state>)`; `generate_audio(state, text)` returns a 1-D tensor at `sample_rate` (24 kHz). Every model path is an `hf://` path resolved by `hf_hub_download`, which reads the cache when the Hugging Face libraries are offline | `tts_model.py`, `utils/utils.py` |
+| Preset voices | The English catalogue maps each name to a recording in `kyutai/tts-voices`, and the voice states are `languages/english/embeddings/<name>.safetensors` at `a7056f50…`. Licences (tts-voices README): VCTK CC BY 4.0; Alba MacKenna CC BY 4.0; voice-donations CC0; Voice-Zero CC0; **Expresso CC BY-NC 4.0** (`cosette`) and **EARS CC BY-NC 4.0** (`jean`), non-commercial only | `utils.py` `_ORIGINS_OF_PREDEFINED_VOICES`, [tts-voices](https://huggingface.co/kyutai/tts-voices) |
+| Watermark | None in the package, the card or the README | the wheel, the card |
+| Kokoro-82M | Weights `apache-2.0` (card metadata); `kokoro-v1_0.pth` 327,212,226 bytes (327 MB); `kokoro` 0.9.4 on PyPI under Apache-2.0. Preset voices only, no cloning | [card](https://huggingface.co/hexgrad/Kokoro-82M), [PyPI](https://pypi.org/project/kokoro/) |
+
+The survey's facts held. Two corrections, both to the request rather than to the sources:
+
+- Kokoro was not new: it has been registered for NARRATE and AUDIO_DESCRIPTION since ADR-011. What it lacked was DUB.
+- The survey left open which Pocket TTS preset voices come from Expresso or EARS. The package's own catalogue answers it: `cosette` (Expresso) and `jean` (EARS). The other English presets come from VCTK, Alba MacKenna's recordings, the voice donations and Voice-Zero. The non-English presets (`giovanni`, `lola`, `juergen`, `rafael`, `daan`, `estelle`) are out of scope, because only English is wired.
+
+### Decision
+
+1. **No default changes.** `DEFAULT_ENGINE` stays Chatterbox for every op. The README and SKILL.md say Chatterbox is unmaintained upstream.
+2. **Kokoro serves DUB.** Its ops become NARRATE, DUB and AUDIO_DESCRIPTION. DUB takes its preset voices per speaker (`--speaker-voice A=af_heart`, else `--voice`, else the language's default). Kokoro has no voice cloning, so a reference voice is refused (`INVALID_ARGUMENT`, `policy: voice_cloning`) as before. Nothing else about Kokoro changes.
+3. **Pocket TTS, a seventh engine id `pocket_tts`, experimental and never a default.** It serves NARRATE, DUB and AUDIO_DESCRIPTION in English (`--lang en`).
+   - **Experimental** (ADR-018's mechanism): `experimental: true` with its reason, in `engines.experimental`, as a warning in every result that used it, and as `engine.experimental` in the provenance. The reason: it was added without a listening comparison on this repository's fixtures. The agent leaves experimental engines out of its choices.
+   - **Licence obligations.** `credit_required: true`. Every clip carries the CC BY 4.0 credit of the model. A preset voice from a CC BY 4.0 source (VCTK, Alba MacKenna) adds that source's credit; a CC0 voice adds none. Both reach `obligations.credit` and the disclosure's credits. To carry two credits per clip, `ops.clip_credits` also takes a list (`extra.credits`) from an engine, in the same shape as one credit. That is internal; the result fields are unchanged.
+   - **Preset voices are an allowlist** of the CC BY 4.0 and CC0 voices: 19 names, default `alba` (the package's own default). `cosette` and `jean` are refused with `INVALID_ARGUMENT` and `policy: voice_licence`, and so is any name not on the list. The allowlist is in the spec's `licence_notes`.
+   - **Voice cloning only with the consent record** (ADR-009), exactly as for Chatterbox and Qwen3-TTS: `voice_cloning: true`, so the base `check_consent` runs in the op and again in the worker, and a reference without a record that checks out is `CONSENT_REQUIRED`. A reference also needs the gated weights. Without them it is `MODEL_NOT_FOUND`, with the steps in `details.download`: accept the terms on the card, `hf auth login`, then `hf download kyutai/pocket-tts languages/english/model.safetensors --revision db04f0e6…`.
+   - **Lookup.** The `pocket-tts` distribution in this interpreter or in `DUBBING_POCKET_TTS_PYTHON` (`>=4.0.1 <4.1.0`, Python >= 3.10), and, in one Hugging Face cache, the tokenizer plus at least one of the two model files, all at the revisions 4.0.1 pins. A file at another revision does not count. `doctor` reports `voice_cloning_weights` and the preset voice states on disk. Missing files give `MODEL_NOT_FOUND` with the `hf download ... --revision ...` lines.
+   - **Synthesis** runs only in the worker, with the Hugging Face libraries offline and `HF_HUB_CACHE` set to the cache the files were found in. The model is loaded once per run. A preset voice is loaded from its local state file, never by its catalogue name, so nothing can be fetched. There is one voice state per voice, `torch.manual_seed(seed)` runs before each line, and the clips are 16-bit mono at 24 kHz. It runs on CPU only; upstream supports no `device` argument.
+4. **Install is opt-in through doctor's install line, not a pip extra** (ADR-001, ADR-002): `pocket-tts[audio]==4.0.1` in its own venv, from the PyTorch CPU index so that no CUDA wheels are pulled in. The base install of this package gains no dependency.
+5. **Tests and CI download no model.** A fake `pocket_tts` package in the 4.0.1 shapes runs through the real worker and reads only files from the pinned cache paths, offline. The consent gate is covered for this engine: `CONSENT_REQUIRED` in the op, again in the worker, and the existing cloning-engine test now includes `pocket_tts`. The one real-engine test skips unless `DUBBING_REAL_POCKET_TTS=1`. CI's skip filters allow it, and no CI job installs the engine.
+
+### Contract
+
+Additive only: `si contract-diff` against v1.0.0 reports 7 additive items and nothing breaking. They are the new engine entry `engines.registered.pocket_tts`, `pocket_tts` in `engines.experimental`, `dub` in `engines.registered.kokoro.ops`, `kokoro` and `pocket_tts` in `tools[dubbing/dub].engines`, and `pocket_tts` in the engines of the other two ops. `engines.default`, `provides[]`, `policy`, the errors and every result schema are unchanged. `contract_version` stays 1.0.
+
+The `[--engine ...]` placeholder in each tool's `argv` and the narrate tool's `inputs` text keep their 1.0.0 wording. si treats any change to an `argv` list, or a replaced string in a list, as breaking. ADR-023 section 4 would allow that break in a minor release, because the `--engine` choices are a section 2 part. Here the change was kept additive instead, so video-production-agent can re-pin without review. `tools[].engines` (and `engines.registered`) is the machine-readable list of the engines each op takes. The `argv` placeholder can be brought up to date in a later release that is reviewed for it.
+
+### Consequences
+
+- Callers that name no engine get the same audio as before.
+- An English user can choose Kokoro for DUB as well as for narration, or Pocket TTS with a CC BY credit to carry.
+- Pocket TTS's non-English models, its other English variants (2m, 7m, 18m and 24-layer), and a listening comparison with Chatterbox are left for later (roadmap step 18, open notes).

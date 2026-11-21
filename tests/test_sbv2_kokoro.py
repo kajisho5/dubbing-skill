@@ -93,6 +93,30 @@ class KokoroTests(unittest.TestCase):
                                            engine="kokoro"), skill=WaveSkill())
         self.assertEqual((doc["engine"]["id"], doc["clips"][0]["status"]), ("kokoro", "fit"))
 
+    def test_dub_with_kokoro_in_english(self):
+        # DUB takes Kokoro from 1.1.0 (ADR-024): its preset voices per speaker, never a reference voice
+        prog = write_programme(os.path.join(self.tmp.name, "p.wav"), [("tone", 6.0)], rate=KOKORO_RATE)
+        texts = ["Hello there.", "Thank you."]
+        cues = write(os.path.join(self.tmp.name, "en.json"), json.dumps(
+            [{"start": 0.5, "end": 2.5, "text": texts[0], "speaker": "A"}, {"start": 3.0, "end": 5.0, "text": texts[1], "speaker": "B"}]))
+        with kokoro_ready(self.tmp.name) as site:
+            doc = dub(DubRequest(input_path=prog, cues_path=cues, output_path=self.out, lang="en-us", engine="kokoro",
+                                 speaker_voices={"A": "af_heart"}), skill=WaveSkill())
+            calls = fake_chatterbox_calls(site)
+            ref = write_tone_wav(os.path.join(self.tmp.name, "r.wav"), seconds=2.0)
+            with self.assertRaises(DubbingError) as e:
+                dub(DubRequest(input_path=prog, cues_path=cues, output_path=self.out, lang="en-us", engine="kokoro", overwrite=True,
+                               reference_path=ref, consent_path=make_consent(self.tmp.name, ref)), skill=WaveSkill())
+            self.assertEqual(len(fake_chatterbox_calls(site)), len(calls))               # refused before the engine
+        self.assertEqual((e.exception.code, e.exception.details["policy"]), ("INVALID_ARGUMENT", "voice_cloning"))
+        gens = [c for c in calls if c["call"] == "generate"]
+        self.assertEqual([c["text"] for c in gens], texts)
+        self.assertEqual({c["lang_code"] for c in gens}, {"a"})
+        self.assertTrue(all(c["voice"].replace("\\", "/").endswith("voices/af_heart.pt") for c in gens))   # B: the en-us default
+        self.assertEqual((doc["engine"]["id"], [c["status"] for c in doc["clips"]]), ("kokoro", ["fit", "fit"]))
+        self.assertEqual(doc["obligations"]["credit"], [])                           # af_heart carries no credit
+        self.assertFalse(doc["disclosure"]["cloned_voice"])
+
     def test_not_installed_is_a_clear_error_with_the_install_line(self):
         with tempfile.TemporaryDirectory() as hf, env(**no_engines_env(hf)), self.assertRaises(DubbingError) as e:
             narrate(NarrateRequest(script_path=self.script, output_path=self.out, lang="ja", engine="kokoro"), skill=WaveSkill())

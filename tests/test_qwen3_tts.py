@@ -103,7 +103,7 @@ class SpecTests(unittest.TestCase):
 
     def test_the_contract_marks_it_experimental(self):
         c = contract()
-        self.assertEqual(c["engines"]["experimental"], ["qwen3_tts"])
+        self.assertEqual(c["engines"]["experimental"], ["pocket_tts", "qwen3_tts"])
         self.assertIn("never a default", c["engines"]["experimental_policy"])
         self.assertTrue(c["engines"]["registered"]["qwen3_tts"]["experimental"])
         self.assertFalse(c["engines"]["registered"]["chatterbox"]["experimental"])

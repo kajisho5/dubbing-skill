@@ -43,7 +43,7 @@ class EngineSpec:
     credit_required: bool
     watermark: Optional[str]                  # watermark the engine embeds in every clip; None = none
     languages: Tuple[str, ...]
-    japanese: str                             # "native" | "weak" (ADR-001)
+    japanese: str                             # "native" | "weak" (ADR-001) | "none" (an English-only engine, ADR-024)
     voice_cloning: bool                       # can speak in a real person's voice (needs a consent record, ADR-009)
     isolation: str                            # how the engine is kept apart from this MIT package
     version_range: str

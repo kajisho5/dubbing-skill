@@ -49,7 +49,7 @@ DEFAULT_PARAMS = {"speed": 1.0}
 
 SPEC = EngineSpec(
     id="kokoro",
-    ops=("narrate", "audio_description"),
+    ops=("narrate", "dub", "audio_description"),         # DUB from 1.1.0 (ADR-024): the same preset voices, no cloning
     description="Kokoro-82M: light, CPU-friendly TTS with fixed voices (no cloning); Japanese voices are low quality",
     kind="python",
     code_license="Apache-2.0",
