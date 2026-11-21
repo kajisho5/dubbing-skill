@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6 - 2026-11-21
+
+- fix: engine provenance records the model revision the worker loaded, not the earlier report's (#34) (73eec26)
+
 ## 0.2.5 - 2026-11-21
 
 - fix: terms --transcript counts each use against the entry that matched it, not every entry with its term (#33) (4837c0e)
