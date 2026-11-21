@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0 - 2026-11-21
+
+- feat!: 1.0.0 - DUB is STABLE; breaking changes to it only in a major release (ADR-023) (#35) (2d51f22)
+
 ## 0.2.6 - 2026-11-21
 
 - fix: engine provenance records the model revision the worker loaded, not the earlier report's (#34) (73eec26)
