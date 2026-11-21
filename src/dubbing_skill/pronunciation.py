@@ -462,9 +462,11 @@ def _count(pattern: "re.Pattern[str]", text: str) -> int:
     return len(pattern.findall(text)) if text else 0
 
 
-def heard_check(transcript_path: str, entries: Sequence[Entry], expected: Dict[str, int], lang: str) -> Dict[str, Any]:
+def heard_check(transcript_path: str, entries: Sequence[Entry], expected: Dict[Tuple[str, str], int],
+                lang: str) -> Dict[str, Any]:
     """`dubbing terms --transcript`: whether a transcription-skill Transcript of the output has each dictionary term
-    the script uses read as the dictionary says, as often as the script uses it (roadmap step 12)."""
+    the script uses read as the dictionary says, as often as the script uses it (roadmap step 12). `expected` is keyed
+    by the entry that matched, (term, lang): two entries with the same term (en and en-US) are not both counted."""
     src = os.path.abspath(transcript_path)
     if not os.path.isfile(src):
         raise DubbingError("INPUT_NOT_FOUND", f"{transcript_path} is not a file", {"input": transcript_path})
@@ -484,8 +486,8 @@ def heard_check(transcript_path: str, entries: Sequence[Entry], expected: Dict[s
     bounds = _BOUNDARIES(text) if lookup is not None and _BOUNDARIES is not None else None
     prov = doc.get("provenance") if isinstance(doc.get("provenance"), dict) else {}
     terms: List[Dict[str, Any]] = []
-    for e in sorted((e for e in entries if expected.get(e.term)), key=lambda e: e.term):
-        want = expected[e.term]
+    for e in sorted((e for e in entries if expected.get((e.term, e.lang))), key=lambda e: (e.term, e.lang)):
+        want = expected[(e.term, e.lang)]
         term = unicodedata.normalize("NFKC", e.term)
         written = _count(_pattern(term), text)
         as_kana = len(kana_spans(text, _TRANSCRIPT_DROP.sub("", e.reading), bounds))
@@ -527,8 +529,8 @@ def terms_report(script_path: str, dictionary_path: str, lang: str, transcript_p
     for line in script.lines:
         found = line_terms(line.text, entries)
         used.update(t["term"] for t in found)
-        for t in found:
-            counts[t["term"]] = counts.get(t["term"], 0) + 1
+        for e, _, _ in find_terms(line.text, entries):      # the entry that matched, not every entry with its term
+            counts[(e.term, e.lang)] = counts.get((e.term, e.lang), 0) + 1
         lines.append({"index": line.index, "start": line.start, "end": line.end, "terms": found})
     doc = {"schema": TERMS_SCHEMA, "ok": True, "op": "terms", "skill": {"id": SKILL_ID, "version": __version__},
             "input": {"path": src, "lines": len(script.lines), "lang": lang, "format": script.source_format},
