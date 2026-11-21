@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 - 2026-11-21
+
+- feat: opt-in English engines - Kokoro for DUB, Pocket TTS (experimental); no default change (ADR-024) (#37) (cc7f099)
+
 ## 1.0.0 - 2026-11-21
 
 - feat!: 1.0.0 - DUB is STABLE; breaking changes to it only in a major release (ADR-023) (#35) (2d51f22)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dubbing-skill"
-version = "1.0.0"
+version = "1.1.0"
 description = "AI narration (TTS), voice replacement (dubbing) and audio description timed to the picture: local engines behind availability checks; media work through ffmpeg-skill."
 readme = "README.md"
 license = {text = "MIT"}
