@@ -271,6 +271,17 @@ class NarrateTests(Qwen3TtsBase):
         self.assertEqual(calls[0]["snapshot"], MODELS["0.6B"]["revision"])
         self.assertEqual((doc["engine"]["model"], doc["provenance"]["engine"]["revision"]), (MODELS["0.6B"]["repo"], MODELS["0.6B"]["revision"]))
 
+    def test_the_provenance_has_the_revision_the_worker_loaded(self):
+        # the availability report is read before the run; the worker's own snapshot is what made the clips
+        from dubbing_skill import ops
+        real = ops.select_engine
+        stale = lambda *a, **kw: (lambda er: (er[0], dict(er[1], revision="0" * 40)))(real(*a, **kw))
+        with qwen3_tts_ready(self.tmp.name), mock.patch.object(ops, "select_engine", side_effect=stale):
+            doc = self.narrate()
+        m = MODELS["1.7B"]
+        self.assertEqual(doc["provenance"]["engine"]["revision"], m["revision"])
+        self.assertEqual({c["provenance"]["engine"]["revision"] for c in doc["clips"]}, {m["revision"]})
+
     def test_cuda_loads_in_bfloat16(self):
         with qwen3_tts_ready(self.tmp.name) as site, env(DUBBING_QWEN3_TTS_DEVICE="cuda:0"):
             doc = self.narrate()
@@ -368,6 +379,25 @@ class DubTests(Qwen3TtsBase):
         self.assertEqual(sorted(c["reference_sha256"] for c in doc["provenance"]["consent"]), sorted([sha(self.ref), sha(other)]))
         self.assertTrue(doc["disclosure"]["cloned_voice"])
         self.assertTrue(any("experimental" in w for w in doc["warnings"]))
+
+    def test_dub_and_describe_record_the_worker_s_revision(self):
+        from dubbing_skill import describe as describe_mod, dub as dub_mod
+        from dubbing_skill.describe import DescribeRequest, describe
+        programme = write_tone_wav(os.path.join(self.tmp.name, "programme.wav"), seconds=6.0, rate=QWEN_RATE, freq=440.0)
+        cues = write(os.path.join(self.tmp.name, "cues.json"), json.dumps([{"start": 0.5, "end": 2.0, "text": "Hello."}]))
+        gaps = write(os.path.join(self.tmp.name, "gaps.json"), json.dumps([{"start": 0.0, "end": 3.0}]))
+        m = MODELS["1.7B"]
+        for mod, run in ((dub_mod, lambda: dub(DubRequest(input_path=programme, cues_path=cues, output_path=os.path.join(
+                              self.tmp.name, "dubbed.wav"), lang="en", engine="qwen3_tts", reference_path=self.ref,
+                              consent_path=self.record), skill=WaveSkill())),
+                         (describe_mod, lambda: describe(DescribeRequest(input_path=programme, descriptions_path=cues, output_path=os.path.join(
+                              self.tmp.name, "described.wav"), lang="en", engine="qwen3_tts", reference_path=self.ref,
+                              consent_path=self.record, gaps_path=gaps), skill=WaveSkill()))):
+            real = mod.select_engine
+            stale = lambda *a, real=real, **kw: (lambda er: (er[0], dict(er[1], revision="0" * 40)))(real(*a, **kw))
+            with qwen3_tts_ready(self.tmp.name), mock.patch.object(mod, "select_engine", side_effect=stale):
+                doc = run()
+            self.assertEqual(doc["provenance"]["engine"]["revision"], m["revision"], mod.__name__)
 
 
 REAL = os.environ.get("DUBBING_REAL_QWEN3_TTS") == "1"
