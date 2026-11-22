@@ -22,6 +22,8 @@ OPS = ("narrate", "dub", "audio_description")
 KINDS = ("python", "local_http")
 CONSENT_STEP = 6                              # roadmap step of the consent gate for voice cloning (ADR-001, ADR-009)
 CONSENT_PARAM = "consent_path"                # EngineRequest.params key: the consent record for reference_audio
+REFERENCE_PCM_PARAM = "reference_pcm16"       # EngineRequest.params key: a 16-bit PCM WAV copy of reference_audio, made in the
+                                              # run directory for an engine with Engine.reference_pcm16 (ops.pcm_references)
 WORKER_ENV = "DUBBING_IN_WORKER"              # set by the worker process only; engine code is imported nowhere else
 
 
@@ -127,6 +129,9 @@ class Engine:
     """Subclass, set `spec`, implement `inspect()`, and register in `engines/__init__.py`. `process` may be slow and
     runs in the worker process (or, for a local_http engine, talks to the app from there)."""
     spec: EngineSpec
+    # True for an engine whose runtime reads a reference WAV only as 16-bit PCM: the op converts a reference in any other
+    # sample format through ffmpeg-skill before the worker runs (ops.pcm_references). Not part of the spec or contract.
+    reference_pcm16: bool = False
 
     @property
     def id(self) -> str:

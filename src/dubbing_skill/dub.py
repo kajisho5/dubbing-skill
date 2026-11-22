@@ -45,8 +45,8 @@ from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill
 from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, output_kind, programme_layout, render, tolerance,
                      validate_output, watermark_summary)
-from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, engine_warnings, not_an_output, select_engine,
-                  unique_consents, unique_credits, validate_clip, voice_request_fields)
+from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, engine_warnings, not_an_output, pcm_references,
+                  select_engine, unique_consents, unique_credits, validate_clip, voice_request_fields)
 from .disclosure import build_disclosure
 from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
@@ -231,9 +231,10 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
         engine.check_request(r)                   # the consent records and the reference clips' hashes, before any work
     timeout = float(req.timeout)
     skill, info = _usable_skill(skill, req.ffmpeg_skill_dir, timeout)
+    ref_facts: Dict[str, Dict[str, Any]] = {}
     for reference in sorted({r.reference_audio for r in probe_reqs if r.reference_audio}):
         if engine.spec.reference_kind == "audio":                        # a model file (Style-Bert-VITS2) is not probed
-            check_reference(skill, reference)
+            ref_facts[reference] = check_reference(skill, reference)
     in_facts = probe_programme(skill, src, kind, req.audio_stream, script)
     programme_end = float(in_facts["duration"])
 
@@ -243,6 +244,7 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
         os.mkdir(clip_dir)
         reqs = [EngineRequest(op="dub", text=r.text, lang=r.lang, output_path=os.path.join(clip_dir, f"{k:04d}.wav"), voice=r.voice,
                               reference_audio=r.reference_audio, params=dict(r.params)) for k, r in enumerate(probe_reqs)]
+        ref_steps = pcm_references(engine, skill, reqs, ref_facts, run_dir, timeout)
         results = run_engine_batch(engine.id, reqs, timeout, run_dir)
         clip_facts = []
         for k, (r, res) in enumerate(zip(reqs, results)):
@@ -260,7 +262,7 @@ def dub(req: DubRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
                                {"unfit": plan["unfit"], "plan": plan})
         placed = [{"index": d["index"], "start": d["start"], "duration": measured[d["index"]]} for d in plan["lines"]
                   if d["status"] != "unfit"]
-        steps: List[Dict[str, Any]] = [{"tool": "ffmpeg-skill/probe", "for": "programme and clips", "count": len(clip_facts) + 1}]
+        steps: List[Dict[str, Any]] = ref_steps + [{"tool": "ffmpeg-skill/probe", "for": "programme and clips", "count": len(clip_facts) + 1}]
         programme_wav = os.path.join(run_dir, "programme.wav")
         skill.extract_audio(src, programme_wav, req.audio_stream, timeout=timeout)
         steps.append({"tool": "ffmpeg-skill/audio", "flags": ["--audio-stream", str(req.audio_stream)], "for": "programme audio"})

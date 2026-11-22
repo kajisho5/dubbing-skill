@@ -27,8 +27,8 @@ from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill
 from .mixing import (DEFAULT_DUCK_DB, DEFAULT_VOICE_GAIN_DB, check_mix_numbers, programme_layout, render, tolerance, validate_output,
                      watermark_summary)
-from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, engine_warnings, not_an_output, select_engine,
-                  unique_consents, unique_credits, validate_clip, voice_request_fields)
+from .ops import (_place, _run_dir, _usable_skill, check_reference, clip_credits, engine_warnings, not_an_output, pcm_references,
+                  select_engine, unique_consents, unique_credits, validate_clip, voice_request_fields)
 from .disclosure import build_disclosure
 from .profile import profile_receipt, with_profile
 from .pronunciation import prepare as prepare_pronunciation
@@ -210,8 +210,9 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         if problem:
             raise DubbingError("FFMPEG_SKILL_UNAVAILABLE", f"--detect-gaps needs ffmpeg-skill/silence: {problem}; pass --gaps instead",
                                {"tool": "ffmpeg-skill/silence", "problem": problem, "ffmpeg_skill_version": info.version})
+    ref_facts: Dict[str, Dict[str, Any]] = {}
     if reference and engine.spec.reference_kind == "audio":
-        check_reference(skill, reference)
+        ref_facts[reference] = check_reference(skill, reference)
     in_facts = probe_programme(skill, src, kind, req.audio_stream, script)
     programme_end = float(in_facts["duration"])
 
@@ -239,6 +240,7 @@ def describe(req: DescribeRequest, skill: Optional[FfmpegSkill] = None) -> Dict[
         os.mkdir(clip_dir)
         reqs = [EngineRequest(op="audio_description", text=r.text, lang=r.lang, output_path=os.path.join(clip_dir, f"{k:04d}.wav"),
                               voice=r.voice, reference_audio=r.reference_audio, params=dict(r.params)) for k, r in enumerate(probe_reqs)]
+        steps += pcm_references(engine, skill, reqs, ref_facts, run_dir, timeout)
         results = run_engine_batch(engine.id, reqs, timeout, run_dir)
         clip_facts = []
         for k, (r, res) in enumerate(zip(reqs, results)):

@@ -20,7 +20,8 @@ from pathlib import Path
 from unittest import mock
 
 from helpers import (POCKET_RATE, WaveSkill, env, fake_chatterbox_calls, fake_pocket_tts, fake_pocket_tts_weights, make_consent,
-                     no_engines_env, on_python_path, pocket_line_seconds, pocket_tts_ready, run_cli, wav_samples, write_tone_wav)
+                     no_engines_env, on_python_path, pocket_line_seconds, pocket_tts_ready, run_cli, wav_samples, write_float_wav,
+                     write_tone_wav)
 
 from dubbing_skill.contract import contract
 from dubbing_skill.describe import DescribeRequest, describe
@@ -28,7 +29,7 @@ from dubbing_skill.disclosure import check_watermark
 from dubbing_skill.dub import DubRequest, dub
 from dubbing_skill.engines import DEFAULT_ENGINE, get_engine
 from dubbing_skill.engines import pocket_tts
-from dubbing_skill.engines.base import CONSENT_PARAM, EngineRequest
+from dubbing_skill.engines.base import CONSENT_PARAM, REFERENCE_PCM_PARAM, EngineRequest
 from dubbing_skill.engines.pocket_tts import (CLONING, EMBEDDING, EXCLUDED_VOICES, EXPERIMENTAL_REASON, MODEL_CREDIT, PRESET,
                                               TOKENIZER, VOICES)
 from dubbing_skill.errors import DubbingError
@@ -215,9 +216,12 @@ class PocketBase(unittest.TestCase):
         self.record = make_consent(self.tmp.name, self.ref)
 
     def narrate(self, **kw):
+        return self.narrate_with(WaveSkill(), **kw)
+
+    def narrate_with(self, skill, **kw):
         args = dict(script_path=self.script, output_path=self.out, lang="en", engine="pocket_tts")
         args.update(kw)
-        return narrate(NarrateRequest(**args), skill=WaveSkill())
+        return narrate(NarrateRequest(**args), skill=skill)
 
 
 @unittest.skipUnless(NEW_PYTHON, "pocket-tts needs Python >= 3.10 (the fake runs under this interpreter)")
@@ -336,6 +340,55 @@ class VoiceCloningTests(PocketBase):
             self.assertEqual(e.exception.code, "CONSENT_REQUIRED")
             self.assertEqual(fake_chatterbox_calls(site), [])
 
+    def test_the_fake_runtime_cannot_read_a_float_wav_as_pocket_tts_4_0_1_cannot(self):
+        ref = write_float_wav(os.path.join(self.tmp.name, "voice_f32.wav"), seconds=3.0, rate=48000)
+        record = make_consent(self.tmp.name, ref)
+        with pocket_tts_ready(self.tmp.name, cloning=True) as site:
+            req = EngineRequest("narrate", EN[0], "en", os.path.join(self.tmp.name, "a.wav"), reference_audio=ref,
+                                params={CONSENT_PARAM: record})
+            with self.assertRaises(DubbingError) as e:                           # no 16-bit PCM copy: the runtime's wave.Error
+                run_engine_batch("pocket_tts", [req], 60, self.tmp.name)
+            self.assertIn("unknown format: 3", e.exception.message)
+            self.assertFalse(any(c["call"] == "get_state_for_audio_prompt" for c in fake_chatterbox_calls(site)))
+
+    def test_a_float_wav_reference_is_read_as_a_16_bit_pcm_copy(self):
+        ref = write_float_wav(os.path.join(self.tmp.name, "voice_f32.wav"), seconds=3.0, rate=48000)
+        record = make_consent(self.tmp.name, ref)
+        skill = WaveSkill()
+        with pocket_tts_ready(self.tmp.name, cloning=True) as site:
+            doc = narrate(NarrateRequest(script_path=self.script, output_path=self.out, lang="en", engine="pocket_tts",
+                                         reference_path=ref, consent_path=record), skill=skill)
+            calls = fake_chatterbox_calls(site)
+        states = [c for c in calls if c["call"] == "get_state_for_audio_prompt"]
+        self.assertEqual([(c["kind"], c["name"]) for c in states], [("audio", "reference-00.wav")])   # one copy, one state
+        self.assertEqual([c for c in skill.calls if c[0] == "extract"], [("extract", ("voice_f32.wav", 0))])
+        self.assertEqual(doc["provenance"]["consent"][0]["reference_sha256"], sha(ref))           # the caller's own file
+        self.assertIn("reference voice as 16-bit PCM WAV", [s.get("for") for s in doc["steps"]])
+        self.assertTrue(doc["disclosure"]["cloned_voice"])
+        self.assertEqual(len(doc["clips"]), len(EN))
+        self.assertEqual([n for n in os.listdir(self.tmp.name) if n.startswith(".dubbing-")], [])  # the run directory is gone
+
+    def test_a_16_bit_pcm_reference_is_passed_as_it_is(self):
+        skill = WaveSkill()
+        with pocket_tts_ready(self.tmp.name, cloning=True) as site:
+            self.narrate_with(skill, reference_path=self.ref, consent_path=self.record)
+            states = [c for c in fake_chatterbox_calls(site) if c["call"] == "get_state_for_audio_prompt"]
+        self.assertEqual([c["name"] for c in states], ["voice.wav"])
+        self.assertFalse(any(c[0] == "extract" for c in skill.calls))
+
+    def test_a_pcm_copy_outside_the_run_directory_is_refused(self):
+        os.makedirs(os.path.join(self.tmp.name, "elsewhere"))
+        stray = write_tone_wav(os.path.join(self.tmp.name, "elsewhere", "stray.wav"), seconds=3.0, rate=24000)
+        run_dir = os.path.join(self.tmp.name, "run")
+        os.makedirs(os.path.join(run_dir, "clips"))
+        with pocket_tts_ready(self.tmp.name, cloning=True) as site:
+            req = EngineRequest("narrate", EN[0], "en", os.path.join(run_dir, "clips", "0000.wav"), reference_audio=self.ref,
+                                params={CONSENT_PARAM: self.record, REFERENCE_PCM_PARAM: stray})
+            with self.assertRaises(DubbingError) as e:
+                run_engine_batch("pocket_tts", [req], 60, run_dir)
+            self.assertIn("not in this run's directory", e.exception.message)
+            self.assertFalse(any(c["call"] == "get_state_for_audio_prompt" for c in fake_chatterbox_calls(site)))
+
     def test_the_worker_refuses_to_run_outside_itself(self):
         with pocket_tts_ready(self.tmp.name), self.assertRaises(DubbingError) as e:
             get_engine("pocket_tts").process(EngineRequest("narrate", EN[0], "en", os.path.join(self.tmp.name, "a.wav")))
@@ -376,6 +429,24 @@ class DubAndDescribeTests(PocketBase):
                                  reference_path=self.ref, consent_path=self.record), skill=WaveSkill())
         self.assertTrue(doc["disclosure"]["cloned_voice"])
         self.assertEqual(doc["provenance"]["consent"][0]["reference_sha256"], sha(self.ref))
+
+    def test_dub_and_describe_convert_a_float_wav_reference(self):
+        ref = write_float_wav(os.path.join(self.tmp.name, "voice_f32.wav"), seconds=3.0, rate=48000)
+        record = make_consent(self.tmp.name, ref)
+        cues = write(os.path.join(self.tmp.name, "en.json"), json.dumps([{"start": 0.5, "end": 3.5, "text": EN[0]}]))
+        gaps = write(os.path.join(self.tmp.name, "gaps.json"), json.dumps([{"start": 0.5, "end": 5.0}]))
+        ad = write(os.path.join(self.tmp.name, "ad.json"), json.dumps([{"start": 1.0, "end": 4.0, "text": "A door opens."}]))
+        with pocket_tts_ready(self.tmp.name, cloning=True) as site:
+            dubbed = dub(DubRequest(input_path=self.programme, cues_path=cues, output_path=self.out, lang="en", engine="pocket_tts",
+                                    reference_path=ref, consent_path=record), skill=WaveSkill())
+            described = describe(DescribeRequest(input_path=self.programme, descriptions_path=ad,
+                                                 output_path=os.path.join(self.tmp.name, "ad.wav"), lang="en", engine="pocket_tts",
+                                                 gaps_path=gaps, reference_path=ref, consent_path=record), skill=WaveSkill())
+            states = [c for c in fake_chatterbox_calls(site) if c["call"] == "get_state_for_audio_prompt"]
+        self.assertEqual([c["name"] for c in states], ["reference-00.wav", "reference-00.wav"])
+        for doc in (dubbed, described):
+            self.assertEqual(doc["provenance"]["consent"][0]["reference_sha256"], sha(ref))
+            self.assertIn("reference voice as 16-bit PCM WAV", [s.get("for") for s in doc["steps"]])
 
     def test_describe_in_a_preset_voice(self):
         cues = write(os.path.join(self.tmp.name, "ad.json"), json.dumps([{"start": 1.0, "end": 4.0, "text": "A door opens."}]))
