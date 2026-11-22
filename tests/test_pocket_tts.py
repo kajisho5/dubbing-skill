@@ -489,6 +489,21 @@ class DubAndDescribeTests(PocketBase):
         self.assertIn("unknown format: 65534", e.exception.message)
         self.assertEqual([c for c in skill.calls if c[0] == "extract"], [("extract", ("voice_96k.wav", 0))])
 
+    def test_with_only_one_of_the_two_flags_the_call_is_the_1_1_1_call(self):
+        # ADR-024 (1.1.3): the 24 kHz mono copy needs both --sample-rate and --mono declared; with one of them alone the
+        # copy is made as in 1.1.1, with neither flag (not --mono alone, nor --sample-rate alone).
+        ref = write_float_wav(os.path.join(self.tmp.name, "voice_96k.wav"), seconds=3.0, rate=96000)
+        record = make_consent(self.tmp.name, ref)
+        for declared in (("mono",), ("sample_rate",)):
+            with self.subTest(declared=declared):
+                skill = WaveSkill(audio_extra=declared)
+                with pocket_tts_ready(self.tmp.name, cloning=True):
+                    with self.assertRaises(DubbingError) as e:
+                        narrate(NarrateRequest(script_path=self.script, output_path=self.out, lang="en", engine="pocket_tts",
+                                               reference_path=ref, consent_path=record), skill=skill)
+                self.assertIn("unknown format: 65534", e.exception.message)
+                self.assertEqual([c for c in skill.calls if c[0] == "extract"], [("extract", ("voice_96k.wav", 0))])
+
     def test_describe_in_a_preset_voice(self):
         cues = write(os.path.join(self.tmp.name, "ad.json"), json.dumps([{"start": 1.0, "end": 4.0, "text": "A door opens."}]))
         gaps = write(os.path.join(self.tmp.name, "gaps.json"), json.dumps([{"start": 0.5, "end": 5.0}]))

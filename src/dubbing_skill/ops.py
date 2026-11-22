@@ -118,14 +118,16 @@ def pcm_references(engine: Engine, skill: Any, reqs: List[EngineRequest], facts:
     already a 16-bit PCM WAV (by its ffmpeg-skill/probe facts in `facts`) is converted once through ffmpeg-skill/audio
     into a 16-bit PCM WAV in the run directory, and every request with that reference gets the copy in
     params[REFERENCE_PCM_PARAM]. `reference_audio` stays the caller's file: the consent record covers it, and the worker
-    verifies it again. When the engine names a `reference_rate` and ffmpeg-skill/audio declares --sample-rate (and
-    --mono), the copy is made at that rate in mono: ffmpeg writes a WAVE_FORMAT_EXTENSIBLE header above 48 kHz or two
-    channels, which Python 3.10 / 3.11's wave module cannot open. Returns the ffmpeg-skill steps taken."""
+    verifies it again. When the engine names a `reference_rate` and ffmpeg-skill/audio declares both --sample-rate and
+    --mono, the copy is made at that rate in mono: ffmpeg writes a WAVE_FORMAT_EXTENSIBLE header above 48 kHz or two
+    channels, which Python 3.10 / 3.11's wave module cannot open. With only one of the two declared, the call is 1.1.1's
+    (neither flag). Returns the ffmpeg-skill steps taken."""
     if not engine.reference_pcm16:
         return []
     info = skill.info()
-    rate = engine.reference_rate if engine.reference_rate and info.takes_flag("audio", "sample_rate") else None
-    mono = bool(engine.reference_rate) and info.takes_flag("audio", "mono")
+    convert = bool(engine.reference_rate) and info.takes_flag("audio", "sample_rate") and info.takes_flag("audio", "mono")
+    rate = engine.reference_rate if convert else None
+    mono = convert
     extra = {}
     if rate is not None:
         extra["sample_rate"] = rate
