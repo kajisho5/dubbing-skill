@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1 - 2026-11-22
+
+- fix(pocket_tts): pass a reference voice as 16-bit PCM WAV; pocket-tts 4.0.1 cannot open a float WAV (#38) (d26f03b)
+
 ## 1.1.0 - 2026-11-21
 
 - feat: opt-in English engines - Kokoro for DUB, Pocket TTS (experimental); no default change (ADR-024) (#37) (cc7f099)
