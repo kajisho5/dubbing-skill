@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2 - 2026-11-22
+
+- fix(pocket_tts): make the reference copy at 24 kHz mono, so a high-rate reference does not get an extensible WAV header (#39) (c33b474)
+
 ## 1.1.1 - 2026-11-22
 
 - fix(pocket_tts): pass a reference voice as 16-bit PCM WAV; pocket-tts 4.0.1 cannot open a float WAV (#38) (d26f03b)
