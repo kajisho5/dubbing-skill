@@ -448,6 +448,47 @@ class DubAndDescribeTests(PocketBase):
             self.assertEqual(doc["provenance"]["consent"][0]["reference_sha256"], sha(ref))
             self.assertIn("reference voice as 16-bit PCM WAV", [s.get("for") for s in doc["steps"]])
 
+    def test_a_high_rate_reference_is_copied_at_the_engine_rate(self):
+        # A 96 kHz reference (a FLAC from a recorder, here a float WAV: the fake ffmpeg-skill reads WAV only). ffmpeg
+        # writes a WAVE_FORMAT_EXTENSIBLE header above 48 kHz, which Python 3.10 / 3.11's wave cannot open, so the copy
+        # is made at 24 kHz mono when ffmpeg-skill/audio declares --sample-rate and --mono.
+        ref = write_float_wav(os.path.join(self.tmp.name, "voice_96k.wav"), seconds=3.0, rate=96000)
+        record = make_consent(self.tmp.name, ref)
+        skill = WaveSkill(audio_extra=("sample_rate", "mono"))
+        with pocket_tts_ready(self.tmp.name, cloning=True) as site:
+            doc = narrate(NarrateRequest(script_path=self.script, output_path=self.out, lang="en", engine="pocket_tts",
+                                         reference_path=ref, consent_path=record), skill=skill)
+            states = [c for c in fake_chatterbox_calls(site) if c["call"] == "get_state_for_audio_prompt"]
+        self.assertEqual([c["name"] for c in states], ["reference-00.wav"])
+        self.assertEqual([c for c in skill.calls if c[0] == "extract"],
+                         [("extract", ("voice_96k.wav", 0, ("sample_rate", POCKET_RATE), ("mono", True)))])
+        step = [s for s in doc["steps"] if s.get("for") == "reference voice as 16-bit PCM WAV"]
+        self.assertEqual(step[0]["flags"], ["--audio-stream", "0", "--sample-rate", str(POCKET_RATE), "--mono"])
+        self.assertEqual(doc["provenance"]["consent"][0]["reference_sha256"], sha(ref))
+
+    def test_the_adapter_passes_sample_rate_and_mono_to_ffmpeg_skill_audio(self):
+        from dubbing_skill.ffmpeg_skill import FfmpegSkill
+        handle = FfmpegSkill(Path(self.tmp.name))
+        with mock.patch.object(handle, "_run", return_value=(0, '{"status": "completed"}', "")) as run:
+            handle.extract_audio("in.flac", "out.wav", timeout=5)
+            handle.extract_audio("in.flac", "out.wav", timeout=5, sample_rate=24000, mono=True)
+        plain, resampled = (c.args[0][1:] for c in run.call_args_list)
+        self.assertEqual(plain[3:], ["--audio-stream", "0", "--json"])
+        self.assertEqual(resampled[3:], ["--audio-stream", "0", "--sample-rate", "24000", "--mono", "--json"])
+
+    def test_without_the_sample_rate_flag_a_high_rate_copy_keeps_its_rate(self):
+        # An ffmpeg-skill that does not declare --sample-rate gets the 1.1.1 call; the copy keeps 96 kHz, and its
+        # extensible header is what the runtime refuses on Python 3.10 / 3.11 (ADR-024, Limits).
+        ref = write_float_wav(os.path.join(self.tmp.name, "voice_96k.wav"), seconds=3.0, rate=96000)
+        record = make_consent(self.tmp.name, ref)
+        skill = WaveSkill()
+        with pocket_tts_ready(self.tmp.name, cloning=True):
+            with self.assertRaises(DubbingError) as e:
+                narrate(NarrateRequest(script_path=self.script, output_path=self.out, lang="en", engine="pocket_tts",
+                                       reference_path=ref, consent_path=record), skill=skill)
+        self.assertIn("unknown format: 65534", e.exception.message)
+        self.assertEqual([c for c in skill.calls if c[0] == "extract"], [("extract", ("voice_96k.wav", 0))])
+
     def test_describe_in_a_preset_voice(self):
         cues = write(os.path.join(self.tmp.name, "ad.json"), json.dumps([{"start": 1.0, "end": 4.0, "text": "A door opens."}]))
         gaps = write(os.path.join(self.tmp.name, "gaps.json"), json.dumps([{"start": 0.5, "end": 5.0}]))

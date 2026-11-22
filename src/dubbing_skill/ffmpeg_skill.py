@@ -240,11 +240,17 @@ class FfmpegSkill:
         return self._tool("join", [*args, "-o", os.path.abspath(output), "--transition", "none", "--sample-rate", str(int(sample_rate)),
                                    "--channels", str(int(channels))], timeout)
 
-    def extract_audio(self, input_path: str, output: str, audio_stream: int = 0, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def extract_audio(self, input_path: str, output: str, audio_stream: int = 0, timeout: Optional[float] = None,
+                      sample_rate: Optional[int] = None, mono: bool = False) -> Dict[str, Any]:
         """ffmpeg-skill/audio <input> -o <out.wav> --audio-stream N: one audio stream of the programme as PCM WAV (the
-        picture is dropped); the source keeps its rate and layout."""
-        return self._tool("audio", [os.path.abspath(input_path), "-o", os.path.abspath(output), "--audio-stream", str(int(audio_stream))],
-                          timeout)
+        picture is dropped); the source keeps its rate and layout unless `sample_rate` (--sample-rate R) or `mono`
+        (--mono) is given. Pass those only when the checkout declares them (SkillInfo.takes_flag)."""
+        args = [os.path.abspath(input_path), "-o", os.path.abspath(output), "--audio-stream", str(int(audio_stream))]
+        if sample_rate is not None:
+            args += ["--sample-rate", str(int(sample_rate))]
+        if mono:
+            args.append("--mono")
+        return self._tool("audio", args, timeout)
 
     def cut(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
         """ffmpeg-skill/cut <input> --start S --end E --accurate -o <out.wav>: a sample-exact piece of an audio file."""

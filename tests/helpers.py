@@ -390,13 +390,15 @@ def wav_samples(path: str) -> Tuple[int, List[int]]:
     return rate, list(struct.unpack(f"<{n}h", data))
 
 
-def fake_contract(pad_audio: bool = True, drop: Optional[Tuple[str, str]] = None) -> Dict[str, Any]:
+def fake_contract(pad_audio: bool = True, drop: Optional[Tuple[str, str]] = None,
+                  audio_extra: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """An ffmpeg-skill contract document declaring every tool and flag the adapter uses; pad's audio_only is
-    `pad_audio` (ffmpeg-skill 2.23.0 declares false)."""
+    `pad_audio` (ffmpeg-skill 2.23.0 declares false). `audio_extra` adds flags to the audio tool (e.g. "sample_rate",
+    "mono", which ffmpeg-skill/audio declares but the adapter does not require)."""
     from dubbing_skill.ffmpeg_skill import FLAGS_USED, OPTIONAL_TOOLS
     tools = []
     for name, flags in list(FLAGS_USED.items()) + list(OPTIONAL_TOOLS.items()):
-        props = {f: {"type": "string"} for f in flags if (name, f) != drop}
+        props = {f: {"type": "string"} for f in flags + (audio_extra if name == "audio" else ()) if (name, f) != drop}
         tools.append({"name": name, "audio_only": pad_audio if name == "pad" else True, "input_schema": {"properties": props}})
     return {"skill": {"version": "9.9.9-test"}, "contract_version": "1.0", "tools": tools}
 
@@ -406,9 +408,9 @@ class WaveSkill:
     a line over a piece of the programme (--music --music-volume --gain) on 16-bit PCM mono WAV with the wave module,
     each call recorded. Test-only; the package itself only ever runs ffmpeg-skill's tools."""
 
-    def __init__(self, pad_audio: bool = True, drop: Optional[Tuple[str, str]] = None) -> None:
+    def __init__(self, pad_audio: bool = True, drop: Optional[Tuple[str, str]] = None, audio_extra: Tuple[str, ...] = ()) -> None:
         from dubbing_skill.ffmpeg_skill import parse_contract
-        self._info = parse_contract(fake_contract(pad_audio, drop), Path("wave-skill"))
+        self._info = parse_contract(fake_contract(pad_audio, drop, audio_extra), Path("wave-skill"))
         self.calls: List[Tuple[str, Any]] = []
 
     def info(self, timeout: float = 60.0) -> Any:
@@ -440,10 +442,18 @@ class WaveSkill:
         return {"status": "completed"}
 
 
-    def extract_audio(self, input_path: str, output: str, audio_stream: int = 0, timeout: Optional[float] = None) -> Dict[str, Any]:
-        self.calls.append(("extract", (os.path.basename(input_path), audio_stream)))
+    def extract_audio(self, input_path: str, output: str, audio_stream: int = 0, timeout: Optional[float] = None,
+                      sample_rate: Optional[int] = None, mono: bool = False) -> Dict[str, Any]:
+        """As ffmpeg-skill/audio: 16-bit PCM at the source rate, or resampled (nearest sample) to --sample-rate. Above
+        48 kHz the header is WAVE_FORMAT_EXTENSIBLE, as ffmpeg writes it."""
+        extra = tuple(x for x in (("sample_rate", sample_rate) if sample_rate is not None else None,
+                                  ("mono", True) if mono else None) if x)
+        self.calls.append(("extract", (os.path.basename(input_path), audio_stream) + extra))
         rate, samples = wav_samples(input_path)
-        _write16(output, samples, rate)
+        if sample_rate is not None and sample_rate != rate:
+            samples = [samples[int(i * rate / sample_rate)] for i in range(int(len(samples) * sample_rate / rate))]
+            rate = sample_rate
+        (_write16_extensible if rate > 48000 else _write16)(output, samples, rate)
         return {"status": "completed"}
 
     def cut(self, input_path: str, output: str, start: float, end: float, timeout: Optional[float] = None) -> Dict[str, Any]:
@@ -530,6 +540,16 @@ def _write16(path: str, samples: List[int], rate: int) -> None:
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+
+
+def _write16_extensible(path: str, samples: List[int], rate: int) -> None:
+    """A mono 16-bit PCM WAV with a WAVE_FORMAT_EXTENSIBLE (0xFFFE) fmt chunk, as ffmpeg writes above 48 kHz."""
+    import struct
+    sub_format = struct.pack("<IHH", 1, 0x0000, 0x0010) + bytes([0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71])
+    fmt = struct.pack("<HHIIHHHHI", 0xFFFE, 1, rate, rate * 2, 2, 16, 22, 16, 0x4) + sub_format
+    data = struct.pack(f"<{len(samples)}h", *samples)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    Path(path).write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
 
 
 # The fake VOICEVOX (roadmap step 3, ADR-006): a loopback HTTP server in the test process that answers the endpoints
@@ -1123,7 +1143,13 @@ class TTSModel:
                 raise ValueError("We could not download the weights for the model with voice cloning")
             kind = "audio"
             if source.suffix.lower() == ".wav":        # as pocket_tts/data/audio.py audio_read: the wave module first, so a
-                import wave                            # float WAV raises wave.Error ("unknown format: 3") right here
+                import struct                          # float WAV raises wave.Error ("unknown format: 3") right here
+                import wave
+                head = source.read_bytes()[:22]
+                if head[12:16] == b"fmt " and struct.unpack("<H", head[20:22])[0] == 0xFFFE:
+                    # Python 3.10 / 3.11's wave module refuses WAVE_FORMAT_EXTENSIBLE (3.12 reads it); refused on every
+                    # Python here, so the tests do not depend on the interpreter's version
+                    raise wave.Error("unknown format: 65534")
                 with wave.open(str(source), "rb") as w:
                     if w.getsampwidth() != 2:
                         raise ImportError("soundfile is required to read non-WAV or non-16-bit WAV audio files.")

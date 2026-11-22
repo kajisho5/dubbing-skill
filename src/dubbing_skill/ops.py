@@ -118,9 +118,19 @@ def pcm_references(engine: Engine, skill: Any, reqs: List[EngineRequest], facts:
     already a 16-bit PCM WAV (by its ffmpeg-skill/probe facts in `facts`) is converted once through ffmpeg-skill/audio
     into a 16-bit PCM WAV in the run directory, and every request with that reference gets the copy in
     params[REFERENCE_PCM_PARAM]. `reference_audio` stays the caller's file: the consent record covers it, and the worker
-    verifies it again. Returns the ffmpeg-skill steps taken."""
+    verifies it again. When the engine names a `reference_rate` and ffmpeg-skill/audio declares --sample-rate (and
+    --mono), the copy is made at that rate in mono: ffmpeg writes a WAVE_FORMAT_EXTENSIBLE header above 48 kHz or two
+    channels, which Python 3.10 / 3.11's wave module cannot open. Returns the ffmpeg-skill steps taken."""
     if not engine.reference_pcm16:
         return []
+    info = skill.info()
+    rate = engine.reference_rate if engine.reference_rate and info.takes_flag("audio", "sample_rate") else None
+    mono = bool(engine.reference_rate) and info.takes_flag("audio", "mono")
+    extra = {}
+    if rate is not None:
+        extra["sample_rate"] = rate
+    if mono:
+        extra["mono"] = True
     copies: Dict[str, Optional[str]] = {}
     for r in reqs:
         ref = r.reference_audio
@@ -132,12 +142,13 @@ def pcm_references(engine: Engine, skill: Any, reqs: List[EngineRequest], facts:
                 copies[ref] = None
             else:
                 copy = os.path.join(run_dir, f"reference-{len(copies):02d}.wav")
-                skill.extract_audio(ref, copy, timeout=timeout)
+                skill.extract_audio(ref, copy, timeout=timeout, **extra)
                 copies[ref] = copy
         if copies[ref]:
             r.params[REFERENCE_PCM_PARAM] = copies[ref]
     made = sum(1 for c in copies.values() if c)
-    return [{"tool": "ffmpeg-skill/audio", "flags": ["--audio-stream", "0"], "for": "reference voice as 16-bit PCM WAV",
+    flags = ["--audio-stream", "0"] + (["--sample-rate", str(rate)] if rate is not None else []) + (["--mono"] if mono else [])
+    return [{"tool": "ffmpeg-skill/audio", "flags": flags, "for": "reference voice as 16-bit PCM WAV",
              "count": made}] if made else []
 
 

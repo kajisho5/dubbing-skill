@@ -132,6 +132,10 @@ class Engine:
     # True for an engine whose runtime reads a reference WAV only as 16-bit PCM: the op converts a reference in any other
     # sample format through ffmpeg-skill before the worker runs (ops.pcm_references). Not part of the spec or contract.
     reference_pcm16: bool = False
+    # The rate such an engine resamples a reference to (mono). When ffmpeg-skill/audio declares --sample-rate / --mono, the
+    # 16-bit PCM copy is made at this rate and in mono, so it never gets the WAVE_FORMAT_EXTENSIBLE header ffmpeg writes
+    # above 48 kHz or above two channels, which Python 3.10 / 3.11's wave module cannot open. Not part of the spec or contract.
+    reference_rate: Optional[int] = None
 
     @property
     def id(self) -> str:

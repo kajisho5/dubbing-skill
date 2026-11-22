@@ -231,6 +231,7 @@ def reference_source(req: EngineRequest) -> Path:
 class PocketTtsEngine(Engine):
     spec = SPEC
     reference_pcm16 = True                       # audio_read takes a WAV as 16-bit PCM only (reference_source)
+    reference_rate = SAMPLE_RATE                 # get_state_for_audio_prompt resamples a reference to mimi.sample_rate, mono
 
     def inspect(self) -> Dict[str, Any]:
         found = python_packages([DIST], [MODULE], ENV_PYTHON)
