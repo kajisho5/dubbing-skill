@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.3 - 2026-11-22
+
+- fix(pocket_tts): the 24 kHz mono reference copy needs both --sample-rate and --mono declared; otherwise the 1.1.1 call (ADR-024) (#40) (e154c21)
+
 ## 1.1.2 - 2026-11-22
 
 - fix(pocket_tts): make the reference copy at 24 kHz mono, so a high-rate reference does not get an extensible WAV header (#39) (c33b474)
