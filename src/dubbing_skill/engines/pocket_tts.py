@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..errors import DubbingError
-from .base import INCOMPATIBLE, OK, Engine, EngineRequest, EngineResult, EngineSpec, in_range, in_worker, missing, parse_version
+from .base import INCOMPATIBLE, OK, REFERENCE_PCM_PARAM, Engine, EngineRequest, EngineResult, EngineSpec, in_range, in_worker, missing, parse_version
 from .lookup import hf_cache_dirs, python_packages
 
 ENV_PYTHON = "DUBBING_POCKET_TTS_PYTHON"
@@ -211,8 +211,26 @@ def as_samples(audio: Any) -> List[float]:
     return [float(v) for v in values]
 
 
+def reference_source(req: EngineRequest) -> Path:
+    """The file the runtime reads for a reference voice: the op's 16-bit PCM copy when it made one, else the caller's
+    clip. pocket-tts 4.0.1 (`pocket_tts/data/audio.py` audio_read) opens a `.wav` with Python's `wave` module, which
+    raises `wave.Error: unknown format: 3` on a float WAV before its soundfile fallback is reached, so the op converts
+    any reference that is not 16-bit PCM WAV first (ops.pcm_references). The copy must sit in the run directory, next to
+    the clips, so a request cannot swap in a file the consent record does not cover."""
+    copy = req.params.get(REFERENCE_PCM_PARAM) if isinstance(req.params, dict) else None
+    if not copy:
+        return Path(str(req.reference_audio))
+    run_dir = Path(req.output_path).resolve().parent.parent
+    path = Path(str(copy)).resolve()
+    if path.parent != run_dir or not path.is_file():
+        raise DubbingError("INTERNAL_ERROR", "the 16-bit PCM copy of the reference voice is not in this run's directory",
+                           {"engine": SPEC.id, "copy": str(copy)})
+    return path
+
+
 class PocketTtsEngine(Engine):
     spec = SPEC
+    reference_pcm16 = True                       # audio_read takes a WAV as 16-bit PCM only (reference_source)
 
     def inspect(self) -> Dict[str, Any]:
         found = python_packages([DIST], [MODULE], ENV_PYTHON)
@@ -309,7 +327,7 @@ class PocketTtsEngine(Engine):
             voice = self.voice_of(req)
             key = f"voice:{voice}" if voice is not None else f"reference:{req.reference_audio}"
             if key not in states:                         # one voice state per preset voice or reference clip
-                source = embedding_file(cache, voice) if voice is not None else Path(str(req.reference_audio))
+                source = embedding_file(cache, voice) if voice is not None else reference_source(req)
                 if source is None:
                     raise DubbingError("MODEL_NOT_FOUND", f"the Pocket TTS voice state of {voice!r} is gone", {"engine": self.id})
                 states[key] = model.get_state_for_audio_prompt(source)

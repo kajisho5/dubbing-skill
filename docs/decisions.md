@@ -1092,3 +1092,18 @@ The `[--engine ...]` placeholder in each tool's `argv` and the narrate tool's `i
 - Callers that name no engine get the same audio as before.
 - An English user can choose Kokoro for DUB as well as for narration, or Pocket TTS with a CC BY credit to carry.
 - Pocket TTS's non-English models, its other English variants (2m, 7m, 18m and 24-layer), and a listening comparison with Chatterbox are left for later (roadmap step 18, open notes).
+
+### Addendum (1.1.1): a reference voice reaches Pocket TTS as 16-bit PCM WAV
+
+**Problem.** pocket-tts 4.0.1 reads a reference clip with `pocket_tts/data/audio.py` `audio_read`. For a `.wav` it calls Python's `wave.open` first and falls back to soundfile only when the sample width is not 2 bytes. `wave.open` raises `wave.Error: unknown format: 3` on a 32-bit float WAV, before that fallback is reached, so a float WAV reference failed in the worker even with soundfile installed. This was checked on Python 3.11, 3.12 and 3.13.
+
+**Decision.**
+
+1. An engine can set `Engine.reference_pcm16`. This is a class attribute, not part of `EngineSpec` or the contract. Pocket TTS sets it.
+2. `ops.pcm_references` runs in NARRATE, DUB and AUDIO_DESCRIPTION after the reference has been probed. A reference that the probe does not report as a `pcm_s16le` `.wav` is converted once through the existing adapter call `FfmpegSkill.extract_audio` (ffmpeg-skill/audio `-o <run dir>/reference-NN.wav --audio-stream 0`). ffmpeg-skill writes `.wav` as `pcm_s16le`. The copy goes in `params["reference_pcm16"]`, and the step is listed in `steps`.
+3. `reference_audio` stays the caller's file. The consent record covers it, the worker verifies it again, and the provenance records its sha256. The worker reads the copy only if it is in the run directory, next to the clips.
+4. No new ffmpeg-skill tool or flag is used, so the contract does not change.
+
+**Limits.** ffmpeg writes a WAVE_FORMAT_EXTENSIBLE header above 48 kHz or for more than two channels. Python 3.10 and 3.11 cannot open that header, even for 16-bit PCM. Python 3.12 can, and the install line uses 3.12. Such a reference on an engine venv with Python 3.10 or 3.11 still fails in the runtime.
+
+**Tests.** The fake runtime now reads a `.wav` reference with `wave.open` as 4.0.1 does. Without the copy it raises the same `wave.Error`. A float WAV reference is converted in all three ops, a 16-bit PCM reference is passed unchanged, and a copy outside the run directory is refused. No model is downloaded.

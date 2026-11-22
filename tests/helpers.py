@@ -335,9 +335,41 @@ def chatterbox_ready(tmp: str, mode: str = "tone", **fake: Any) -> Iterator[str]
         yield site
 
 
+def write_float_wav(path: str, seconds: float = 1.0, rate: int = 48000, freq: float = 440.0) -> str:
+    """A mono 32-bit float WAV (format tag 3, IEEE float), as a DAW exports; Python's wave module cannot open it."""
+    import math
+    import struct
+    n = int(seconds * rate)
+    data = struct.pack(f"<{n}f", *(0.25 * math.sin(2 * math.pi * freq * i / rate) for i in range(n)))
+    fmt = struct.pack("<HHIIHH", 3, 1, rate, rate * 4, 4, 32)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    Path(path).write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+    return path
+
+
+def _float_wav(path: str) -> Optional[Tuple[int, List[float]]]:
+    """(rate, samples) of a mono 32-bit float WAV written by write_float_wav, else None."""
+    import struct
+    raw = Path(path).read_bytes()
+    if raw[:4] != b"RIFF" or raw[8:12] != b"WAVE" or raw[12:16] != b"fmt ":
+        return None
+    tag, channels, rate = struct.unpack("<HHI", raw[20:28])
+    bits = struct.unpack("<H", raw[34:36])[0]
+    if (tag, channels, bits) != (3, 1, 32) or raw[36:40] != b"data":
+        return None
+    size = struct.unpack("<I", raw[40:44])[0]
+    return rate, list(struct.unpack(f"<{size // 4}f", raw[44:44 + size]))
+
+
 def wav_facts(path: str) -> Dict[str, Any]:
-    """What ffmpeg-skill/probe reports, for a PCM WAV, read with the wave module (unit tests run without FFmpeg)."""
+    """What ffmpeg-skill/probe reports, for a PCM WAV read with the wave module, or a float WAV from write_float_wav
+    (unit tests run without FFmpeg)."""
     import wave
+    floats = _float_wav(path)
+    if floats is not None:
+        rate, samples = floats
+        return {"duration": len(samples) / float(rate), "audio": {"codec": "pcm_f32le", "sample_rate": rate, "channels": 1},
+                "audio_streams": [{"index": 0, "sample_rate": rate, "channels": 1}]}
     with wave.open(path, "rb") as w:
         rate, channels, frames = w.getframerate(), w.getnchannels(), w.getnframes()
     return {"duration": frames / float(rate), "audio": {"codec": "pcm_s16le", "sample_rate": rate, "channels": channels},
@@ -345,8 +377,13 @@ def wav_facts(path: str) -> Dict[str, Any]:
 
 
 def wav_samples(path: str) -> Tuple[int, List[int]]:
+    """16-bit samples of a PCM WAV, or of a float WAV from write_float_wav converted as ffmpeg does (pcm_s16le)."""
     import struct
     import wave
+    floats = _float_wav(path)
+    if floats is not None:
+        rate, values = floats
+        return rate, [max(-32768, min(32767, int(round(v * 32768)))) for v in values]
     with wave.open(path, "rb") as w:
         rate, n = w.getframerate(), w.getnframes()
         data = w.readframes(n)
@@ -1085,6 +1122,11 @@ class TTSModel:
             if not self.has_voice_cloning:
                 raise ValueError("We could not download the weights for the model with voice cloning")
             kind = "audio"
+            if source.suffix.lower() == ".wav":        # as pocket_tts/data/audio.py audio_read: the wave module first, so a
+                import wave                            # float WAV raises wave.Error ("unknown format: 3") right here
+                with wave.open(str(source), "rb") as w:
+                    if w.getsampwidth() != 2:
+                        raise ImportError("soundfile is required to read non-WAV or non-16-bit WAV audio files.")
         _record({"call": "get_state_for_audio_prompt", "kind": kind, "name": source.name})
         return {"voice": source.stem, "kind": kind}
 

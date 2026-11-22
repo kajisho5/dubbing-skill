@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import SKILL_ID, __version__
 from .cues import Script, parse_script
 from .engines import DEFAULT_ENGINE, engines_for, get_engine
-from .engines.base import CONSENT_PARAM, OK, Engine, EngineRequest
+from .engines.base import CONSENT_PARAM, OK, REFERENCE_PCM_PARAM, Engine, EngineRequest
 from .errors import DubbingError
 from .ffmpeg_skill import FfmpegSkill, SkillInfo
 from .disclosure import build_disclosure
@@ -110,6 +110,35 @@ def check_reference(skill: Any, path: str) -> Dict[str, Any]:
         raise DubbingError("UNSUPPORTED_MEDIA", f"the reference voice needs audio of at least {MIN_REFERENCE_SECONDS:g}s",
                            {"reference": path, "duration": facts.get("duration")})
     return facts
+
+
+def pcm_references(engine: Engine, skill: Any, reqs: List[EngineRequest], facts: Dict[str, Dict[str, Any]], run_dir: str,
+                   timeout: Optional[float] = None) -> List[Dict[str, Any]]:
+    """For an engine that reads a reference WAV only as 16-bit PCM (Engine.reference_pcm16), each reference that is not
+    already a 16-bit PCM WAV (by its ffmpeg-skill/probe facts in `facts`) is converted once through ffmpeg-skill/audio
+    into a 16-bit PCM WAV in the run directory, and every request with that reference gets the copy in
+    params[REFERENCE_PCM_PARAM]. `reference_audio` stays the caller's file: the consent record covers it, and the worker
+    verifies it again. Returns the ffmpeg-skill steps taken."""
+    if not engine.reference_pcm16:
+        return []
+    copies: Dict[str, Optional[str]] = {}
+    for r in reqs:
+        ref = r.reference_audio
+        if not ref:
+            continue
+        if ref not in copies:
+            audio = (facts.get(ref) or {}).get("audio") or {}
+            if audio.get("codec") == "pcm_s16le" and ref.lower().endswith(".wav"):
+                copies[ref] = None
+            else:
+                copy = os.path.join(run_dir, f"reference-{len(copies):02d}.wav")
+                skill.extract_audio(ref, copy, timeout=timeout)
+                copies[ref] = copy
+        if copies[ref]:
+            r.params[REFERENCE_PCM_PARAM] = copies[ref]
+    made = sum(1 for c in copies.values() if c)
+    return [{"tool": "ffmpeg-skill/audio", "flags": ["--audio-stream", "0"], "for": "reference voice as 16-bit PCM WAV",
+             "count": made}] if made else []
 
 
 def not_an_output(dst: str, *inputs: Optional[str]) -> None:
@@ -379,8 +408,9 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         engine.check_request(r)                   # the consent record and the reference clip's hash, before any work
     timeout = float(req.timeout)
     skill, info = _usable_skill(skill, req.ffmpeg_skill_dir, timeout)
+    ref_facts: Dict[str, Dict[str, Any]] = {}
     if reference and engine.spec.reference_kind == "audio":          # a model file (Style-Bert-VITS2) is not probed
-        check_reference(skill, reference)
+        ref_facts[reference] = check_reference(skill, reference)
     if script.timed:
         require_cue_placement(info)
     run_dir = _run_dir(os.path.dirname(dst), req.output_path)
@@ -389,6 +419,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         os.mkdir(clip_dir)
         reqs = [EngineRequest(op="narrate", text=r.text, lang=r.lang, output_path=os.path.join(clip_dir, f"{k:04d}.wav"),
                               voice=r.voice, reference_audio=r.reference_audio, params=dict(r.params)) for k, r in enumerate(probe_reqs)]
+        ref_steps = pcm_references(engine, skill, reqs, ref_facts, run_dir, timeout)
         results = run_engine_batch(engine.id, reqs, timeout, run_dir)
         clip_facts = []
         for k, (r, res) in enumerate(zip(reqs, results)):
@@ -398,7 +429,7 @@ def narrate(req: NarrateRequest, skill: Optional[FfmpegSkill] = None) -> Dict[st
         durations = [float(f.get("duration") or 0.0) for f in clip_facts]
         plan = plan_timeline(script, durations, req.on_overflow)
         rate = int(clip_facts[0]["audio"]["sample_rate"])
-        steps: List[Dict[str, Any]] = [{"tool": "ffmpeg-skill/probe", "for": "clips", "count": len(clip_facts)}]
+        steps: List[Dict[str, Any]] = ref_steps + [{"tool": "ffmpeg-skill/probe", "for": "clips", "count": len(clip_facts)}]
         timeline, lay_steps = _lay_out(skill, [r.output_path for r in reqs], plan, rate, run_dir, timeout)
         steps += lay_steps
         loudness = None
